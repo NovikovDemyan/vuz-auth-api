@@ -6,7 +6,7 @@ const cors = require('cors');
 require('dotenv').config(); // Для загрузки JWT_SECRET из .env локально
 
 const app = express();
-const port = process.env.PORT || 3000; // Динамический порт для хостинга
+const port = process.env.PORT || 3000; // Динамический порт для хостингавыфвфы
 const SALT_ROUNDS = 10;
 const SECRET_KEY = process.env.JWT_SECRET; 
 
