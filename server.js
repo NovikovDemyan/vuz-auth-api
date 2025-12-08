@@ -128,7 +128,7 @@ createUsersTable();
 // --- НАСТРОЙКА CORS и MIDDLEWARE (Без изменений) ---
 const allowedOrigins = [
     // !!! ДОЛЖЕН БЫТЬ ТОЧНО ЭТОТ АДРЕС ИЗ КОНСОЛИ !!!
-    'https://fanciful-gingersnap-d87b1c.netlify.app', 
+    'https://vuz-portal-frontend.onrender.com', 
     
     'http://localhost:3000', 
     'http://localhost:5500', 
