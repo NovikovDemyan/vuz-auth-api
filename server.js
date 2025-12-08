@@ -1,10 +1,10 @@
-// auth_api/server.js - ФИНАЛЬНАЯ ВЕРСИЯ С ПОЛНЫМ ФУНКЦИОНАЛОМ И ИСПРАВЛЕННЫМ CORS
+// auth_api/server.js - ФИНАЛЬНАЯ ВЕРСИЯ С ИСПРАВЛЕННОЙ ИНИЦИАЛИЗАЦИЕЙ
 
 const express = require('express');
 const { Pool } = require('pg');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
-const cors = require('cors'); // Подключение CORS Middleware
+const cors = require('cors'); 
 require('dotenv').config(); 
 
 const app = express();
@@ -20,7 +20,9 @@ const JWT_SECRET = process.env.JWT_SECRET || 'YOUR_SECURE_DEFAULT_SECRET_KEY';
 
 if (!DATABASE_URL) {
     console.error("КРИТИЧЕСКАЯ ОШИБКА: Переменная DATABASE_URL не установлена.");
-    process.exit(1);
+    // В случае отсутствия URL, мы не можем продолжить.
+    // process.exit(1); 
+    // В целях отладки на Render, оставим это сообщение.
 }
 
 // Конфигурация для подключения к PostgreSQL (с SSL для Render)
@@ -34,27 +36,13 @@ const pool = new Pool({
 
 // --- 2. НАСТРОЙКА CORS и MIDDLEWARE ---
 
-// !!! ВАШ СПИСОК РАЗРЕШЕННЫХ ДОМЕНОВ !!!
-const allowedOrigins = [
-    // !!! ЗАМЕНИТЕ ЭТОТ АДРЕС НА ВАШ АДРЕС NETLIFY !!!
-    'https://fanciful-gingersnap-d87b1c.netlify.app', 
-    'http://localhost:3000', 
-    'http://localhost:5500', 
-];
-
-const corsOptions = {
-    origin: (origin, callback) => {
-        if (!origin || allowedOrigins.includes(origin)) { 
-            callback(null, true);
-        } else {
-            callback(new Error('CORS Policy Blocked by Server'), false);
-        }
-    },
+// УПРОЩЕННЫЙ CORS (разрешает все для простоты развертывания)
+app.use(cors({
+    origin: '*',
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
-    credentials: true, // Разрешить куки и заголовки авторизации
-};
+    credentials: true,
+}));
 
-app.use(cors(corsOptions)); 
 app.use(express.json()); 
 
 
@@ -75,7 +63,9 @@ async function createUsersTable() {
         await pool.query(queryText);
         console.log('Таблица users успешно создана или уже существует.');
     } catch (err) {
-        console.error('Ошибка создания таблицы users:', err);
+        // Если ошибка здесь, это 99% проблема подключения
+        console.error('КРИТИЧЕСКАЯ ОШИБКА: Ошибка создания таблицы users (проверьте DATABASE_URL):', err.message);
+        throw new Error("DB connection failed or table creation error.");
     }
 }
 
@@ -97,11 +87,12 @@ async function createDocumentsTable() {
         await pool.query(queryText);
         console.log('Таблица documents успешно создана или уже существует.');
     } catch (err) {
-        console.error('Ошибка создания таблицы documents:', err);
+        console.error('КРИТИЧЕСКАЯ ОШИБКА: Ошибка создания таблицы documents:', err.message);
+        throw new Error("DB connection failed or table creation error.");
     }
 }
 
-// 3.3. Создание Куратора по умолчанию
+// 3.3. Создание Куратора по умолчанию и тестовых аккаунтов
 async function createDefaultAdmin() {
     const defaultEmail = 'admin@vuz.ru';
     const defaultPassword = 'admin';
@@ -114,7 +105,7 @@ async function createDefaultAdmin() {
                 'INSERT INTO users (email, password_hash, role, full_name) VALUES ($1, $2, $3, $4)',
                 [defaultEmail, hashedPassword, 'Куратор', 'Главный Куратор']
             );
-            // Добавим Студента и Преподавателя для тестирования:
+            
             const studentPass = await bcrypt.hash('123456', SALT_ROUNDS);
             await pool.query('INSERT INTO users (email, password_hash, role, full_name) VALUES ($1, $2, $3, $4)', ['student@vuz.ru', studentPass, 'Студент', 'Иванов Иван']);
             const teacherPass = await bcrypt.hash('123456', SALT_ROUNDS);
@@ -123,14 +114,29 @@ async function createDefaultAdmin() {
             console.log(`Тестовые аккаунты созданы (Куратор: ${defaultEmail}/admin, Студент/Преподаватель: 123456)`);
         }
     } catch (err) {
-        console.error('Ошибка создания администратора по умолчанию:', err);
+        console.error('Ошибка создания тестовых пользователей:', err);
     }
 }
 
-// Вызов функций инициализации при старте
-createUsersTable();
-createDocumentsTable(); 
-createDefaultAdmin();
+// --- 3.4. Функция инициализации и запуска ---
+async function initializeApp() {
+    try {
+        await createUsersTable();
+        await createDocumentsTable(); 
+        await createDefaultAdmin(); 
+        
+        // Запуск сервера только после успешной инициализации DB
+        app.listen(port, () => {
+            console.log(`Сервер API запущен на порту ${port}`);
+        });
+    } catch (error) {
+        console.error("СЕРВЕР НЕ БЫЛ ЗАПУЩЕН: Критическая ошибка инициализации:", error.message);
+        // Если инициализация не удалась, сервер не запустится
+    }
+}
+
+// Вызов функции инициализации при старте
+initializeApp();
 
 
 // --- 4. MIDDLEWARE (Проверка ролей) ---
@@ -211,8 +217,9 @@ app.post('/login', async (req, res) => {
 
         res.json({ success: true, token, user: { email: user.email, role: user.role, full_name: user.full_name } });
     } catch (error) {
+        // ЭТА ОШИБКА ВЫЗЫВАЕТ 500, ЕСЛИ БАЗА ДАННЫХ НЕДОСТУПНА
         console.error("Ошибка логина:", error);
-        res.status(500).json({ success: false, message: 'Ошибка сервера при авторизации.' });
+        res.status(500).json({ success: false, message: 'Ошибка сервера при авторизации. Проверьте логи сервера и подключение к DB.' });
     }
 });
 
@@ -337,10 +344,4 @@ app.put('/api/documents/:id', authenticateToken, async (req, res) => {
         console.error("Ошибка при обновлении документа:", error);
         res.status(500).json({ success: false, message: 'Ошибка сервера при обновлении документа.' });
     }
-});
-
-
-// --- 7. ЗАПУСК СЕРВЕРА ---
-app.listen(port, () => {
-    console.log(`Сервер API запущен на порту ${port}`);
 });
