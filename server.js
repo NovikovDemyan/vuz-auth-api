@@ -1,4 +1,4 @@
-// auth_api/server.js - ФИНАЛЬНАЯ ВЕРСИЯ С POSTGRESQL И УЛУЧШЕННОЙ ОТЛАДКОЙ
+// auth_api/server.js - ФИНАЛЬНАЯ ВЕРСИЯ С POSTGRESQL И ВСТРОЕННЫМИ ШАБЛОНАМИ
 
 const express = require('express');
 const bcrypt = require('bcrypt');
@@ -28,7 +28,49 @@ const pool = new Pool({
     }
 });
 
-// Функция для создания таблиц (ОСТАВЛЕНО БЕЗ ИЗМЕНЕНИЙ)
+// --- ШАБЛОНЫ ДОКУМЕНТОВ (НОВАЯ СЕКЦИЯ) ---
+const documentTemplates = {
+    // 1. Заявление на Отпуск
+    'Заявление на Отпуск': {
+        parts: [
+            { type: "text", content: "Я, Студент " },
+            { type: "input", name: "Фамилия_Имя" },
+            { type: "text", content: ", прошу предоставить мне отпуск с " },
+            { type: "input", name: "Дата_Начала" },
+            { type: "text", content: " по " },
+            { type: "input", name: "Дата_Окончания" },
+            { type: "text", content: ". Основание:" },
+            { type: "input", name: "Основание" },
+            { type: "text", content: "." }
+        ]
+    },
+    // 2. Уведомление о Задолженности
+    'Уведомление о Задолженности': {
+        parts: [
+            { type: "text", content: "Уважаемый Студент " },
+            { type: "input", name: "Фамилия_Имя" },
+            { type: "text", content: "! У вас имеется задолженность по предмету " },
+            { type: "input", name: "Название_Предмета" },
+            { type: "text", content: ". Срок сдачи до " },
+            { type: "input", name: "Крайний_Срок" },
+            { type: "text", content: "." }
+        ]
+    },
+    // 3. Запрос на Смену Руководителя
+    'Запрос на Смену Руководителя': {
+        parts: [
+            { type: "text", content: "Прошу разрешить мне сменить научного руководителя дипломного проекта с " },
+            { type: "input", name: "Текущий_Руководитель" },
+            { type: "text", content: " на " },
+            { type: "input", name: "Новый_Руководитель" },
+            { type: "text", content: ". Причина: " },
+            { type: "input", name: "Причина_Смены" },
+            { type: "text", content: "." }
+        ]
+    }
+};
+
+// Функция для создания таблиц 
 async function createUsersTable() {
     try {
         const queryUsers = `
@@ -43,6 +85,7 @@ async function createUsersTable() {
         await pool.query(queryUsers);
         console.log('Таблица users успешно создана или уже существует.');
 
+        // --- ТАБЛИЦА DOCUMENTS (Убедитесь, что после DROP TABLE она будет создана корректно) ---
         const queryDocuments = `
             CREATE TABLE IF NOT EXISTS documents (
                 id SERIAL PRIMARY KEY,
@@ -59,6 +102,7 @@ async function createUsersTable() {
         console.log('Таблица documents успешно создана или уже существует.');
 
 
+        // Добавление тестового Куратора, если он не существует (Пароль: 123456)
         const curatorCheck = await pool.query('SELECT 1 FROM users WHERE email = $1', ['curator@vuz.ru']);
         if (curatorCheck.rowCount === 0) {
             const password = '123456';
@@ -121,7 +165,6 @@ function isCurator(req, res, next) {
     }
 }
 
-// --- MIDDLEWARE ПРОВЕРКИ РОЛИ ПРЕПОДАВАТЕЛЯ ---
 function isTeacher(req, res, next) {
     if (req.user && req.user.role === 'Преподаватель') {
         next(); 
@@ -131,7 +174,8 @@ function isTeacher(req, res, next) {
 }
 
 
-// --- 1. МАРШРУТ РЕГИСТРАЦИИ (БЕЗ ИЗМЕНЕНИЙ) ---
+// --- 1-5. Маршруты (Без изменений) ---
+
 app.post('/api/register', async (req, res) => {
     const { name, email, password } = req.body;
     
@@ -155,7 +199,6 @@ app.post('/api/register', async (req, res) => {
     }
 });
 
-// --- 2. МАРШРУТ АВТОРИЗАЦИИ (БЕЗ ИЗМЕНЕНИЙ) ---
 app.post('/api/login', async (req, res) => {
     const { email, password } = req.body;
     
@@ -182,7 +225,6 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// --- 3. ЗАЩИЩЕННЫЙ МАРШРУТ (ПРИВЕТСТВИЕ) (БЕЗ ИЗМЕНЕНИЙ) ---
 app.get('/api/greeting', authenticateToken, (req, res) => {
     const userName = req.user.name;
     const userRole = req.user.role; 
@@ -195,7 +237,6 @@ app.get('/api/greeting', authenticateToken, (req, res) => {
     });
 });
 
-// --- 4. ЗАЩИЩЕННЫЙ МАРШРУТ (ИЗМЕНЕНИЕ РОЛИ) (БЕЗ ИЗМЕНЕНИЙ) ---
 app.put('/api/users/role', authenticateToken, isCurator, async (req, res) => {
     const { email, newRole } = req.body;
 
@@ -223,8 +264,6 @@ app.put('/api/users/role', authenticateToken, isCurator, async (req, res) => {
     }
 });
 
-
-// --- 5. МАРШРУТ: ПОЛУЧЕНИЕ ВСЕХ ПОЛЬЗОВАТЕЛЕЙ (БЕЗ ИЗМЕНЕНИЙ) ---
 app.get('/api/users', authenticateToken, isCurator, async (req, res) => {
     try {
         const result = await pool.query('SELECT id, name, email, role, hashedpassword FROM users ORDER BY id ASC');
@@ -240,25 +279,36 @@ app.get('/api/users', authenticateToken, isCurator, async (req, res) => {
 });
 
 
-// --- 6. МАРШРУТ: СОЗДАНИЕ НОВОГО ДОКУМЕНТА (ОБНОВЛЕНО ДЛЯ ОТЛАДКИ) ---
+// --- 6. МАРШРУТ: СОЗДАНИЕ НОВОГО ДОКУМЕНТА (ОБНОВЛЕНО: ЧТЕНИЕ ШАБЛОНА ИЗ documentTemplates) ---
 app.post('/api/documents/create', authenticateToken, isTeacher, async (req, res) => {
-    const { title, studentEmail, template } = req.body;
-    let teacherId = req.user.id; // Используем let для возможности изменения
+    const { templateName, studentEmail, title } = req.body; 
 
-    if (!title || !studentEmail || !template) {
-        return res.status(400).json({ success: false, message: "Отсутствуют обязательные поля: title, studentEmail, template." });
+    // 1. Проверяем наличие шаблона в коде сервера
+    const template = documentTemplates[templateName];
+    if (!template) {
+        return res.status(400).json({ success: false, message: `Шаблон с именем "${templateName}" не найден в коде сервера.` });
     }
+
+    // 2. Устанавливаем заголовок и ID преподавателя
+    const finalTitle = title || templateName;
+    const teacherId = req.user.id; 
     
-    // --- ИСПРАВЛЕНИЕ: ПРИВЕДЕНИЕ ID К ЧИСЛУ ---
-    if (typeof teacherId === 'string') {
-        teacherId = parseInt(teacherId, 10);
+    // 3. Базовая проверка email студента
+    if (!studentEmail) {
+        return res.status(400).json({ success: false, message: "Отсутствует Email студента." });
     }
-    if (isNaN(teacherId)) {
+
+    // 4. Проверка типа ID преподавателя (безопасность)
+    let finalTeacherId = teacherId;
+    if (typeof finalTeacherId === 'string') {
+        finalTeacherId = parseInt(finalTeacherId, 10);
+    }
+    if (isNaN(finalTeacherId)) {
          console.error("Ошибка аутентификации: teacherId не является числом:", req.user.id);
          return res.status(400).json({ success: false, message: "Ошибка аутентификации: ID преподавателя недействителен." });
     }
     
-    // Проверка существования студента
+    // 5. Проверка существования студента
     const studentCheck = await pool.query('SELECT 1 FROM users WHERE email = $1 AND role = $2', [studentEmail, 'Студент']);
     if (studentCheck.rowCount === 0) {
         return res.status(404).json({ success: false, message: `Студент с email ${studentEmail} не найден.` });
@@ -267,24 +317,23 @@ app.post('/api/documents/create', authenticateToken, isTeacher, async (req, res)
     try {
         const result = await pool.query(
             'INSERT INTO documents (title, student_email, template, teacher_id) VALUES ($1, $2, $3, $4) RETURNING id',
-            [title, studentEmail, template, teacherId]
+            [finalTitle, studentEmail, template, finalTeacherId] // template теперь JSON-объект
         );
 
         res.status(201).json({ 
             success: true, 
-            message: 'Документ успешно создан и отправлен студенту.',
+            message: `Документ "${finalTitle}" успешно создан и отправлен студенту.`,
             documentId: result.rows[0].id
         });
     } catch (error) {
-        // --- УЛУЧШЕННОЕ ЛОГИРОВАНИЕ ОШИБКИ СЕРВЕРА ---
         console.error("Ошибка при создании документа (SQL/Server):", error.message); 
-        console.error("Используемые данные:", { title, studentEmail, template: JSON.stringify(template).substring(0, 100) + '...', teacherId });
+        console.error("Используемые данные:", { finalTitle, studentEmail, templateName, teacherId });
         res.status(500).json({ success: false, message: "Ошибка сервера при создании документа." });
     }
 });
 
 
-// --- 7. МАРШРУТ: ПОЛУЧЕНИЕ ДОКУМЕНТОВ ДЛЯ ЗАПОЛНЕНИЯ (БЕЗ ИЗМЕНЕНИЙ) ---
+// --- 7. МАРШРУТ: ПОЛУЧЕНИЕ ДОКУМЕНТОВ ДЛЯ ЗАПОЛНЕНИЯ (Без изменений) ---
 app.get('/api/documents/student', authenticateToken, async (req, res) => {
     if (req.user.role !== 'Студент') {
         return res.status(403).json({ success: false, message: "Доступ разрешен только для Студентов." });
@@ -309,7 +358,7 @@ app.get('/api/documents/student', authenticateToken, async (req, res) => {
     }
 });
 
-// --- 8. МАРШРУТ: ОТПРАВКА ЗАПОЛНЕННОГО ДОКУМЕНТА (БЕЗ ИЗМЕНЕНИЙ) ---
+// --- 8. МАРШРУТ: ОТПРАВКА ЗАПОЛНЕННОГО ДОКУМЕНТА (Без изменений) ---
 app.put('/api/documents/submit/:id', authenticateToken, async (req, res) => {
     if (req.user.role !== 'Студент') {
         return res.status(403).json({ success: false, message: "Доступ разрешен только для Студентов." });
