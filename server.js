@@ -89,7 +89,7 @@ async function createUsersTable() {
         await pool.query(queryUsers);
         console.log('Таблица users успешно создана или уже существует.');
 
-        // ТАБЛИЦА DOCUMENTS (Шаблон JSONB не меняется, submitted_data JSONB используется для сохранения заполненных данных)
+        // ТАБЛИЦА DOCUMENTS 
         const queryDocuments = `
             CREATE TABLE IF NOT EXISTS documents (
                 id SERIAL PRIMARY KEY,
@@ -285,19 +285,16 @@ app.get('/api/users', authenticateToken, isCurator, async (req, res) => {
 
 // --- 6. МАРШРУТ: СОЗДАНИЕ НОВОГО ДОКУМЕНТА (ОБНОВЛЕНО: Принимает teacherData) ---
 app.post('/api/documents/create', authenticateToken, isTeacher, async (req, res) => {
-    const { templateName, studentEmail, title, teacherData } = req.body; // Получаем teacherData
+    const { templateName, studentEmail, title, teacherData } = req.body; 
 
-    // 1. Проверяем наличие шаблона
     const template = documentTemplates[templateName];
     if (!template) {
         return res.status(400).json({ success: false, message: `Шаблон с именем "${templateName}" не найден в коде сервера.` });
     }
 
-    // 2. Устанавливаем заголовок и ID преподавателя
     const finalTitle = title || templateName;
     const teacherId = req.user.id; 
     
-    // 3. Базовая проверка email студента и ID преподавателя
     if (!studentEmail) {
         return res.status(400).json({ success: false, message: "Отсутствует Email студента." });
     }
@@ -306,14 +303,12 @@ app.post('/api/documents/create', authenticateToken, isTeacher, async (req, res)
          return res.status(400).json({ success: false, message: "Ошибка аутентификации: ID преподавателя недействителен." });
     }
     
-    // 4. Проверка существования студента
     const studentCheck = await pool.query('SELECT 1 FROM users WHERE email = $1 AND role = $2', [studentEmail, 'Студент']);
     if (studentCheck.rowCount === 0) {
         return res.status(404).json({ success: false, message: `Студент с email ${studentEmail} не найден.` });
     }
 
     try {
-        // template - это полный шаблон, submitted_data - это данные, заполненные преподавателем
         const result = await pool.query(
             'INSERT INTO documents (title, student_email, template, teacher_id, submitted_data) VALUES ($1, $2, $3, $4, $5) RETURNING id',
             [finalTitle, studentEmail, template, finalTeacherId, teacherData || {}] // Сохраняем заполненные Преподавателем данные
@@ -331,7 +326,7 @@ app.post('/api/documents/create', authenticateToken, isTeacher, async (req, res)
 });
 
 
-// --- 7. МАРШРУТ: ПОЛУЧЕНИЕ ДОКУМЕНТОВ ДЛЯ ЗАПОЛНЕНИЯ (ОБНОВЛЕНО: Отдает submitted_data) ---
+// --- 7. МАРШРУТ: ПОЛУЧЕНИЕ ДОКУМЕНТОВ ДЛЯ ЗАПОЛНЕНИЯ (СТУДЕНТ) ---
 app.get('/api/documents/student', authenticateToken, async (req, res) => {
     if (req.user.role !== 'Студент') {
         return res.status(403).json({ success: false, message: "Доступ разрешен только для Студентов." });
@@ -357,7 +352,8 @@ app.get('/api/documents/student', authenticateToken, async (req, res) => {
     }
 });
 
-// --- 8. МАРШРУТ: ОТПРАВКА ЗАПОЛНЕННОГО ДОКУМЕНТА (ОБНОВЛЕНО: Объединяет studentData с текущими submitted_data) ---
+
+// --- 8. МАРШРУТ: ОТПРАВКА ЗАПОЛНЕННОГО ДОКУМЕНТА (СТУДЕНТ) ---
 app.put('/api/documents/submit/:id', authenticateToken, async (req, res) => {
     if (req.user.role !== 'Студент') {
         return res.status(403).json({ success: false, message: "Доступ разрешен только для Студентов." });
@@ -405,6 +401,32 @@ app.put('/api/documents/submit/:id', authenticateToken, async (req, res) => {
     }
 });
 
+
+// --- 9. НОВЫЙ МАРШРУТ: ПОЛУЧЕНИЕ ВСЕХ ДОКУМЕНТОВ, СОЗДАННЫХ ПРЕПОДАВАТЕЛЕМ ---
+app.get('/api/documents/teacher', authenticateToken, isTeacher, async (req, res) => {
+    
+    const teacherId = req.user.id; 
+
+    try {
+        // Получаем ВСЕ документы, созданные данным преподавателем (по teacher_id)
+        const documentsResult = await pool.query(
+            `SELECT id, title, student_email, template, status, submitted_data, created_at 
+             FROM documents 
+             WHERE teacher_id = $1 
+             ORDER BY created_at DESC`,
+            [teacherId]
+        );
+        
+        res.status(200).json({ 
+            success: true, 
+            documents: documentsResult.rows 
+        });
+
+    } catch (error) {
+        console.error("Ошибка получения документов для преподавателя:", error);
+        res.status(500).json({ success: false, message: "Ошибка сервера при получении документов." });
+    }
+});
 
 app.listen(port, () => {
     console.log(`Сервер API запущен на порту ${port}`);
