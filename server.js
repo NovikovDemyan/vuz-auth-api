@@ -26,7 +26,7 @@ const usersDB = [
 // ВНИМАНИЕ: Замените заглушку на реальный публичный домен вашего фронтенда (например, https://vuz-portal.vercel.app)
 const allowedOrigins = [
     'http://localhost:5500', // Для локальной работы с Live Server
-    'https://vuz-auth-api.onrender.com', // Если фронтенд запущен здесь же
+    'http://localhost:3000', // Если фронтенд запущен здесь же
     'https://fanciful-gingersnap-d87b1c.netlify.app/' // <<< ВСТАВЬТЕ СЮДА АДРЕС САЙТА ВУЗА
 ];
 
