@@ -25,10 +25,11 @@ const usersDB = [
 // --- НАСТРОЙКА CORS (Критично для работы на разных доменах) ---
 // ВНИМАНИЕ: Замените заглушку на реальный публичный домен вашего фронтенда (например, https://vuz-portal.vercel.app)
 const allowedOrigins = [
-    'https://fanciful-gingersnap-d87b1c.netlify.app',
-    'http://localhost:5500', // Для локальной работы с Live Server
-    'http://localhost:3000', // Если фронтенд запущен здесь же
-    'https://fanciful-gingersnap-d87b1c.netlify.app/' // <<< ВСТАВЬТЕ СЮДА АДРЕС САЙТА ВУЗА
+    // !!! ДОЛЖЕН БЫТЬ ТОЧНО ЭТОТ АДРЕС ИЗ КОНСОЛИ !!!
+    'https://fanciful-gingersnap-d87b1c.netlify.app', 
+    
+    'http://localhost:3000', 
+    'http://localhost:5500', 
 ];
 
 const corsOptions = {
