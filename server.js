@@ -360,7 +360,7 @@ app.put('/api/documents/submit/:id', authenticateToken, async (req, res) => {
     }
     
     const documentId = req.params.id;
-    const { studentData } = req.body; // Теперь это studentData
+    const { studentData } = req.body; 
     
     if (!studentData) {
          return res.status(400).json({ success: false, message: "Отсутствуют заполненные данные." });
@@ -402,7 +402,7 @@ app.put('/api/documents/submit/:id', authenticateToken, async (req, res) => {
 });
 
 
-// --- 9. НОВЫЙ МАРШРУТ: ПОЛУЧЕНИЕ ВСЕХ ДОКУМЕНТОВ, СОЗДАННЫХ ПРЕПОДАВАТЕЛЕМ ---
+// --- 9. МАРШРУТ: ПОЛУЧЕНИЕ ВСЕХ ДОКУМЕНТОВ, СОЗДАННЫХ ПРЕПОДАВАТЕЛЕМ ---
 app.get('/api/documents/teacher', authenticateToken, isTeacher, async (req, res) => {
     
     const teacherId = req.user.id; 
