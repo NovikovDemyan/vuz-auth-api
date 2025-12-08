@@ -28,7 +28,7 @@ const pool = new Pool({
     }
 });
 
-// Функция для создания таблиц (обновлена для добавления documents)
+// Функция для создания таблиц (ОБНОВЛЕНА для добавления documents)
 async function createUsersTable() {
     try {
         const queryUsers = `
@@ -112,7 +112,7 @@ function authenticateToken(req, res, next) {
 
     jwt.verify(token, SECRET_KEY, (err, userPayload) => {
         if (err) return res.sendStatus(403); 
-        req.user = userPayload; // req.user теперь содержит { id, name, role, email (после исправления login) }
+        req.user = userPayload; // req.user теперь содержит { id, name, role, email }
         next(); 
     });
 }
@@ -160,7 +160,7 @@ app.post('/api/register', async (req, res) => {
     }
 });
 
-// --- 2. МАРШРУТ АВТОРИЗАЦИИ (ДОБАВЛЕН EMAIL В JWT) ---
+// --- 2. МАРШРУТ АВТОРИЗАЦИИ (ИСПРАВЛЕН: ДОБАВЛЕН EMAIL В JWT) ---
 app.post('/api/login', async (req, res) => {
     const { email, password } = req.body;
     
@@ -284,7 +284,7 @@ app.get('/api/documents/student', authenticateToken, async (req, res) => {
         return res.status(403).json({ success: false, message: "Доступ разрешен только для Студентов." });
     }
     
-    // Email студента берется прямо из JWT (благодаря исправлению в /api/login)
+    // Email студента берется прямо из JWT
     const studentEmail = req.user.email;
 
     try {
