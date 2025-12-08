@@ -1,4 +1,4 @@
-// auth_api/server.js - ФИНАЛЬНАЯ ВЕРСИЯ С POSTGRESQL И РАЗДЕЛЕНИЕМ ПОЛЕЙ ПО РОЛЯМ
+// auth_api/server.js - ФИНАЛЬНАЯ ВЕРСИЯ С ПОЛНЫМ ДОКУМЕНТООБОРОТОМ
 
 const express = require('express');
 const bcrypt = require('bcrypt');
@@ -28,7 +28,7 @@ const pool = new Pool({
     }
 });
 
-// --- ШАБЛОНЫ ДОКУМЕНТОВ (ОБНОВЛЕННАЯ СЕКЦИЯ: Добавлено role: 'Студент'/'Преподаватель') ---
+// --- ШАБЛОНЫ ДОКУМЕНТОВ ---
 const documentTemplates = {
     // 1. Заявление на Отпуск
     'Заявление на Отпуск': {
@@ -74,7 +74,7 @@ const documentTemplates = {
     }
 };
 
-// Функция для создания таблиц (без изменений, кроме создания)
+// Функция для создания таблиц 
 async function createUsersTable() {
     try {
         const queryUsers = `
@@ -98,7 +98,7 @@ async function createUsersTable() {
                 student_email VARCHAR(100) NOT NULL,
                 teacher_id INTEGER NOT NULL REFERENCES users(id),
                 status VARCHAR(50) DEFAULT 'Ожидает заполнения', 
-                submitted_data JSONB, // Хранит заполненные данные (сначала Преподавателем, потом Студентом)
+                submitted_data JSONB, // Хранит заполненные данные
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
         `;
@@ -125,7 +125,7 @@ async function createUsersTable() {
 createUsersTable();
 
 
-// --- НАСТРОЙКА CORS и MIDDLEWARE (Без изменений) ---
+// --- НАСТРОЙКА CORS и MIDDLEWARE ---
 const allowedOrigins = [
     // !!! ДОЛЖЕН БЫТЬ ТОЧНО ЭТОТ АДРЕС ИЗ КОНСОЛИ !!!
     'https://vuz-portal-frontend.onrender.com', 
@@ -148,7 +148,7 @@ app.use(cors(corsOptions));
 app.use(express.json()); 
 
 
-// --- MIDDLEWARE ПРОВЕРКИ JWT и РОЛИ (Без изменений) ---
+// --- MIDDLEWARE ПРОВЕРКИ JWT и РОЛИ ---
 function authenticateToken(req, res, next) {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1]; 
@@ -178,8 +178,7 @@ function isTeacher(req, res, next) {
 }
 
 
-// --- 1-5. Маршруты Аутентификации и Управления Ролями (Без изменений) ---
-
+// --- 1. Маршрут: Регистрация ---
 app.post('/api/register', async (req, res) => {
     const { name, email, password } = req.body;
     
@@ -203,6 +202,7 @@ app.post('/api/register', async (req, res) => {
     }
 });
 
+// --- 2. Маршрут: Вход ---
 app.post('/api/login', async (req, res) => {
     const { email, password } = req.body;
     
@@ -229,6 +229,7 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
+// --- 3. Маршрут: Приветствие ---
 app.get('/api/greeting', authenticateToken, (req, res) => {
     const userName = req.user.name;
     const userRole = req.user.role; 
@@ -241,6 +242,7 @@ app.get('/api/greeting', authenticateToken, (req, res) => {
     });
 });
 
+// --- 4. Маршрут: Изменение роли (Куратор) ---
 app.put('/api/users/role', authenticateToken, isCurator, async (req, res) => {
     const { email, newRole } = req.body;
 
@@ -268,6 +270,7 @@ app.put('/api/users/role', authenticateToken, isCurator, async (req, res) => {
     }
 });
 
+// --- 5. Маршрут: Получение пользователей (Куратор) ---
 app.get('/api/users', authenticateToken, isCurator, async (req, res) => {
     try {
         const result = await pool.query('SELECT id, name, email, role, hashedpassword FROM users ORDER BY id ASC');
@@ -283,7 +286,7 @@ app.get('/api/users', authenticateToken, isCurator, async (req, res) => {
 });
 
 
-// --- 6. МАРШРУТ: СОЗДАНИЕ НОВОГО ДОКУМЕНТА (ОБНОВЛЕНО: Принимает teacherData) ---
+// --- 6. Маршрут: Создание нового документа (Преподаватель) ---
 app.post('/api/documents/create', authenticateToken, isTeacher, async (req, res) => {
     const { templateName, studentEmail, title, teacherData } = req.body; 
 
@@ -326,7 +329,7 @@ app.post('/api/documents/create', authenticateToken, isTeacher, async (req, res)
 });
 
 
-// --- 7. МАРШРУТ: ПОЛУЧЕНИЕ ДОКУМЕНТОВ ДЛЯ ЗАПОЛНЕНИЯ (СТУДЕНТ) ---
+// --- 7. Маршрут: Получение документов для заполнения (Студент) ---
 app.get('/api/documents/student', authenticateToken, async (req, res) => {
     if (req.user.role !== 'Студент') {
         return res.status(403).json({ success: false, message: "Доступ разрешен только для Студентов." });
@@ -340,10 +343,10 @@ app.get('/api/documents/student', authenticateToken, async (req, res) => {
             [studentEmail]
         );
         
-        // Отправляем документы, которые ожидают заполнения (статус 'Ожидает заполнения')
+        // Отправляем документы, которые ожидают заполнения ИЛИ отправлены на доработку
         res.status(200).json({ 
             success: true, 
-            documents: documentsResult.rows.filter(doc => doc.status === 'Ожидает заполнения') 
+            documents: documentsResult.rows.filter(doc => doc.status === 'Ожидает заполнения' || doc.status === 'На доработку') 
         });
 
     } catch (error) {
@@ -353,7 +356,7 @@ app.get('/api/documents/student', authenticateToken, async (req, res) => {
 });
 
 
-// --- 8. МАРШРУТ: ОТПРАВКА ЗАПОЛНЕННОГО ДОКУМЕНТА (СТУДЕНТ) ---
+// --- 8. Маршрут: Отправка заполненного документа (Студент) ---
 app.put('/api/documents/submit/:id', authenticateToken, async (req, res) => {
     if (req.user.role !== 'Студент') {
         return res.status(403).json({ success: false, message: "Доступ разрешен только для Студентов." });
@@ -369,7 +372,7 @@ app.put('/api/documents/submit/:id', authenticateToken, async (req, res) => {
     const studentEmail = req.user.email;
 
     try {
-        // 1. Получаем текущие данные (заполненные преподавателем)
+        // 1. Получаем текущие данные (заполненные преподавателем/студентом)
         const currentDoc = await pool.query(
             'SELECT submitted_data FROM documents WHERE id = $1 AND student_email = $2',
             [documentId, studentEmail]
@@ -381,10 +384,11 @@ app.put('/api/documents/submit/:id', authenticateToken, async (req, res) => {
         
         const existingData = currentDoc.rows[0].submitted_data || {};
         
-        // 2. Объединяем старые и новые данные
+        // 2. Объединяем старые и новые данные (новые данные студента перезаписывают старые)
         const finalSubmittedData = { ...existingData, ...studentData };
         
-        // 3. Обновляем документ
+        // 3. Обновляем статус и данные
+        // Статус меняется на 'Заполнено', независимо от того, был ли он 'Ожидает заполнения' или 'На доработку'
         const result = await pool.query(
             'UPDATE documents SET status = $1, submitted_data = $2 WHERE id = $3 AND student_email = $4 RETURNING id',
             ['Заполнено', finalSubmittedData, documentId, studentEmail]
@@ -393,7 +397,7 @@ app.put('/api/documents/submit/:id', authenticateToken, async (req, res) => {
 
         res.status(200).json({ 
             success: true, 
-            message: `Документ "${documentId}" успешно заполнен и отправлен.` 
+            message: `Документ "${documentId}" успешно заполнен и отправлен на проверку.` 
         });
     } catch (error) {
         console.error("Ошибка при отправке заполненного документа:", error);
@@ -402,7 +406,74 @@ app.put('/api/documents/submit/:id', authenticateToken, async (req, res) => {
 });
 
 
-// --- 9. МАРШРУТ: ПОЛУЧЕНИЕ ВСЕХ ДОКУМЕНТОВ, СОЗДАННЫХ ПРЕПОДАВАТЕЛЕМ ---
+// --- 9. Маршрут: Рассмотрение документа Преподавателем (ОДОБРЕНИЕ/ОТКАЗ) ---
+app.put('/api/documents/review/:id', authenticateToken, isTeacher, async (req, res) => {
+    const documentId = req.params.id;
+    // action: 'REJECT' или 'APPROVE'
+    const { action, documentNumber, documentDate, reason } = req.body; 
+    const teacherId = req.user.id; 
+
+    try {
+        // 1. Проверяем документ
+        const currentDoc = await pool.query(
+            'SELECT submitted_data, status FROM documents WHERE id = $1 AND teacher_id = $2',
+            [documentId, teacherId]
+        );
+
+        if (currentDoc.rowCount === 0) {
+            return res.status(404).json({ success: false, message: `Документ с ID ${documentId} не найден или не принадлежит вам.` });
+        }
+        
+        const currentStatus = currentDoc.rows[0].status;
+        if (currentStatus !== 'Заполнено') {
+            return res.status(400).json({ success: false, message: `Документ находится в статусе "${currentStatus}". Изменить можно только документ в статусе "Заполнено".` });
+        }
+        
+        let newStatus;
+        let finalDataUpdate = {};
+        let successMessage;
+
+        if (action === 'REJECT') {
+            // Отправить на доработку
+            newStatus = 'На доработку';
+            // Добавляем причину в submitted_data, чтобы студент ее увидел
+            finalDataUpdate = { review_reason: reason || 'Причина не указана.' };
+            successMessage = `Документ ${documentId} отправлен студенту на доработку.`;
+
+        } else if (action === 'APPROVE') {
+            // Одобрить и отправить Куратору
+            if (!documentNumber || !documentDate) {
+                 return res.status(400).json({ success: false, message: "Для одобрения необходимо указать Номер документа и Дату регистрации." });
+            }
+            newStatus = 'Одобрено, Куратору';
+            // Добавляем финальные данные к уже существующим
+            finalDataUpdate = { documentNumber: documentNumber, documentDate: documentDate };
+            successMessage = `Документ ${documentId} одобрен и отправлен Куратору.`;
+
+        } else {
+            return res.status(400).json({ success: false, message: "Неверное действие." });
+        }
+        
+        // Объединяем финальные данные с существующими в submitted_data
+        const existingData = currentDoc.rows[0].submitted_data || {};
+        const mergedData = { ...existingData, ...finalDataUpdate };
+        
+        // Обновляем статус и данные
+        await pool.query(
+            'UPDATE documents SET status = $1, submitted_data = $2 WHERE id = $3',
+            [newStatus, mergedData, documentId]
+        );
+
+        res.status(200).json({ success: true, message: successMessage });
+
+    } catch (error) {
+        console.error("Ошибка при рассмотрении документа преподавателем:", error);
+        res.status(500).json({ success: false, message: "Ошибка сервера при рассмотрении документа." });
+    }
+});
+
+
+// --- 10. Маршрут: Получение всех документов, созданных Преподавателем ---
 app.get('/api/documents/teacher', authenticateToken, isTeacher, async (req, res) => {
     
     const teacherId = req.user.id; 
