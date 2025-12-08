@@ -1,4 +1,4 @@
-// auth_api/server.js - ФИНАЛЬНАЯ ВЕРСИЯ С ПОЛНЫМ ФУНКЦИОНАЛОМ
+// auth_api/server.js - ФИНАЛЬНАЯ ВЕРСИЯ С ИСПРАВЛЕНИЕМ ОШИБКИ СКАЧИВАНИЯ
 
 const express = require('express');
 const bcrypt = require('bcrypt');
@@ -389,10 +389,10 @@ app.put('/api/documents/submit/:id', authenticateToken, async (req, res) => {
 });
 
 
-// --- 9. МАРШРУТ: ПОЛУЧЕНИЕ ЗАПОЛНЕННЫХ ДОКУМЕНТОВ ДЛЯ КУРАТОРА (НОВЫЙ) ---
+// --- 9. МАРШРУТ: ПОЛУЧЕНИЕ ЗАПОЛНЕННЫХ ДОКУМЕНТОВ ДЛЯ КУРАТОРА (ИСПРАВЛЕНО) ---
 app.get('/api/documents/curator', authenticateToken, isCurator, async (req, res) => {
     try {
-        // Запрос всех документов со статусом "Заполнено" с присоединением имен пользователей
+        // Используем LEFT JOIN, чтобы избежать ошибок, если пользователь был удален
         const documentsResult = await pool.query(
             `
             SELECT 
@@ -400,8 +400,8 @@ app.get('/api/documents/curator', authenticateToken, isCurator, async (req, res)
                 u_student.name AS student_name, u_student.email AS student_email,
                 u_teacher.name AS teacher_name
             FROM documents d
-            JOIN users u_student ON d.student_email = u_student.email
-            JOIN users u_teacher ON d.teacher_id = u_teacher.id
+            LEFT JOIN users u_student ON d.student_email = u_student.email
+            LEFT JOIN users u_teacher ON d.teacher_id = u_teacher.id
             WHERE d.status = $1 
             ORDER BY d.created_at DESC
             `,
@@ -420,7 +420,7 @@ app.get('/api/documents/curator', authenticateToken, isCurator, async (req, res)
 });
 
 
-// --- 10. МАРШРУТ: СКАЧИВАНИЕ ЗАПОЛНЕННОГО ДОКУМЕНТА (НОВЫЙ) ---
+// --- 10. МАРШРУТ: СКАЧИВАНИЕ ЗАПОЛНЕННОГО ДОКУМЕНТА (ИСПРАВЛЕНО) ---
 app.get('/api/documents/download/:id', authenticateToken, isCurator, async (req, res) => {
     const documentId = req.params.id;
 
@@ -429,10 +429,11 @@ app.get('/api/documents/download/:id', authenticateToken, isCurator, async (req,
             `
             SELECT 
                 d.title, d.submitted_data, d.created_at,
-                u_student.name AS student_name, u_teacher.name AS teacher_name
+                u_student.name AS student_name, u_student.email AS student_email,
+                u_teacher.name AS teacher_name
             FROM documents d
-            JOIN users u_student ON d.student_email = u_student.email
-            JOIN users u_teacher ON d.teacher_id = u_teacher.id
+            LEFT JOIN users u_student ON d.student_email = u_student.email
+            LEFT JOIN users u_teacher ON d.teacher_id = u_teacher.id
             WHERE d.id = $1 AND d.status = $2
             `,
             [documentId, 'Заполнено']
@@ -441,14 +442,19 @@ app.get('/api/documents/download/:id', authenticateToken, isCurator, async (req,
         const doc = result.rows[0];
 
         if (!doc) {
-            return res.status(404).json({ success: false, message: "Заполненный документ не найден." });
+            return res.status(404).json({ success: false, message: "Заполненный документ не найден или еще не заполнен студентом." });
         }
+
+        // Обработка потенциальных NULL из LEFT JOIN
+        const studentName = doc.student_name || 'НЕДОСТУПНО (Пользователь удален)';
+        const teacherName = doc.teacher_name || 'НЕДОСТУПНО (Пользователь удален)';
+        const studentEmail = doc.student_email || 'Неизвестен';
 
         // --- ГЕНЕРАЦИЯ ТЕКСТОВОГО СОДЕРЖИМОГО (ИМИТАЦИЯ PDF) ---
         let content = `--- ДОКУМЕНТ ВУЗА: ${doc.title.toUpperCase()} ---\n\n`;
         content += `Дата заполнения: ${new Date(doc.created_at).toLocaleString('ru-RU')}\n`;
-        content += `Студент: ${doc.student_name}\n`;
-        content += `Преподаватель (инициатор): ${doc.teacher_name}\n`;
+        content += `Студент: ${studentName} (Email: ${studentEmail})\n`;
+        content += `Преподаватель (инициатор): ${teacherName}\n`;
         content += `-----------------------------------------------------------\n\n`;
 
         // Форматирование заполненных данных
@@ -471,12 +477,19 @@ app.get('/api/documents/download/:id', authenticateToken, isCurator, async (req,
 
         // Отправка файла как plain text (TXT) с кодировкой UTF-8
         res.setHeader('Content-Type', 'text/plain; charset=utf-8'); 
-        res.setHeader('Content-Disposition', `attachment; filename="${doc.title}_${doc.student_name}_ID${documentId}.txt"`);
+        
+        // Очищаем имена для заголовка Content-Disposition, чтобы избежать ошибок
+        const safeStudentName = studentName.replace(/[^a-zA-Zа-яА-Я0-9\s]/g, '').trim() || 'student';
+        const safeTitle = doc.title.replace(/[^a-zA-Zа-яА-Я0-9\s]/g, '').trim() || 'document';
+        
+        res.setHeader('Content-Disposition', `attachment; filename="${safeTitle}_${safeStudentName}_ID${documentId}.txt"`);
         
         res.send(content);
 
     } catch (error) {
-        console.error("Ошибка при скачивании документа:", error);
+        console.error(`Ошибка при скачивании документа ID ${documentId}:`, error.message);
+        // Выводим ошибку в консоль сервера для отладки
+        console.error(error); 
         res.status(500).json({ success: false, message: "Ошибка сервера при подготовке файла." });
     }
 });
