@@ -1,4 +1,4 @@
-// auth_api/server.js - ФИНАЛЬНАЯ ВЕРСИЯ С ИСПРАВЛЕННОЙ ИНИЦИАЛИЗАЦИЕЙ
+// auth_api/server.js - ФИНАЛЬНАЯ ВЕРСИЯ С ИСПРАВЛЕННОЙ СИНХРОНИЗАЦИЕЙ ЗАПУСКА
 
 const express = require('express');
 const { Pool } = require('pg');
@@ -20,9 +20,9 @@ const JWT_SECRET = process.env.JWT_SECRET || 'YOUR_SECURE_DEFAULT_SECRET_KEY';
 
 if (!DATABASE_URL) {
     console.error("КРИТИЧЕСКАЯ ОШИБКА: Переменная DATABASE_URL не установлена.");
-    // В случае отсутствия URL, мы не можем продолжить.
-    // process.exit(1); 
-    // В целях отладки на Render, оставим это сообщение.
+    // В отличие от предыдущей версии, здесь мы позволим процессу завершиться, 
+    // чтобы Render корректно пометил сервис как нерабочий, если нет DB.
+    process.exit(1); 
 }
 
 // Конфигурация для подключения к PostgreSQL (с SSL для Render)
@@ -38,7 +38,7 @@ const pool = new Pool({
 
 // УПРОЩЕННЫЙ CORS (разрешает все для простоты развертывания)
 app.use(cors({
-    origin: '*',
+    origin: '*', // Разрешаем доступ со всех доменов
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     credentials: true,
 }));
@@ -63,9 +63,8 @@ async function createUsersTable() {
         await pool.query(queryText);
         console.log('Таблица users успешно создана или уже существует.');
     } catch (err) {
-        // Если ошибка здесь, это 99% проблема подключения
         console.error('КРИТИЧЕСКАЯ ОШИБКА: Ошибка создания таблицы users (проверьте DATABASE_URL):', err.message);
-        throw new Error("DB connection failed or table creation error.");
+        throw err; // Перебрасываем ошибку, чтобы остановить запуск сервера
     }
 }
 
@@ -88,7 +87,7 @@ async function createDocumentsTable() {
         console.log('Таблица documents успешно создана или уже существует.');
     } catch (err) {
         console.error('КРИТИЧЕСКАЯ ОШИБКА: Ошибка создания таблицы documents:', err.message);
-        throw new Error("DB connection failed or table creation error.");
+        throw err; // Перебрасываем ошибку
     }
 }
 
@@ -118,9 +117,10 @@ async function createDefaultAdmin() {
     }
 }
 
-// --- 3.4. Функция инициализации и запуска ---
+// --- 3.4. Функция инициализации и запуска (НОВОЕ) ---
 async function initializeApp() {
     try {
+        // Ожидаем завершения всех DB операций перед запуском сервера
         await createUsersTable();
         await createDocumentsTable(); 
         await createDefaultAdmin(); 
@@ -130,8 +130,8 @@ async function initializeApp() {
             console.log(`Сервер API запущен на порту ${port}`);
         });
     } catch (error) {
-        console.error("СЕРВЕР НЕ БЫЛ ЗАПУЩЕН: Критическая ошибка инициализации:", error.message);
-        // Если инициализация не удалась, сервер не запустится
+        console.error("СЕРВЕР НЕ БЫЛ ЗАПУЩЕН: Критическая ошибка инициализации (проверьте DB):", error.message);
+        process.exit(1); // Выход, если DB недоступна
     }
 }
 
@@ -217,9 +217,10 @@ app.post('/login', async (req, res) => {
 
         res.json({ success: true, token, user: { email: user.email, role: user.role, full_name: user.full_name } });
     } catch (error) {
-        // ЭТА ОШИБКА ВЫЗЫВАЕТ 500, ЕСЛИ БАЗА ДАННЫХ НЕДОСТУПНА
+        // Это сообщение будет возвращено, если DB недоступна, но теперь мы уверены,
+        // что сервер запущен только при доступности DB.
         console.error("Ошибка логина:", error);
-        res.status(500).json({ success: false, message: 'Ошибка сервера при авторизации. Проверьте логи сервера и подключение к DB.' });
+        res.status(500).json({ success: false, message: 'Ошибка сервера при авторизации.' });
     }
 });
 
