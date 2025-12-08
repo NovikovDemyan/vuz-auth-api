@@ -1,4 +1,4 @@
-// auth_api/server.js - ФИНАЛЬНАЯ ВЕРСИЯ С POSTGRESQL И ДОКУМЕНТАМИ
+// auth_api/server.js - ФИНАЛЬНАЯ ВЕРСИЯ С POSTGRESQL И УЛУЧШЕННОЙ ОТЛАДКОЙ
 
 const express = require('express');
 const bcrypt = require('bcrypt');
@@ -28,12 +28,10 @@ const pool = new Pool({
     }
 });
 
-// Функция для создания таблиц (ОБНОВЛЕНА для добавления documents)
+// Функция для создания таблиц (ОСТАВЛЕНО БЕЗ ИЗМЕНЕНИЙ)
 async function createUsersTable() {
     try {
         const queryUsers = `
-            -- ВНИМАНИЕ: PostgreSQL преобразует имена столбцов в нижний регистр, 
-            -- поэтому в запросах мы должны использовать 'hashedpassword'.
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
                 name VARCHAR(100) NOT NULL,
@@ -45,7 +43,6 @@ async function createUsersTable() {
         await pool.query(queryUsers);
         console.log('Таблица users успешно создана или уже существует.');
 
-        // --- НОВАЯ ТАБЛИЦА DOCUMENTS ---
         const queryDocuments = `
             CREATE TABLE IF NOT EXISTS documents (
                 id SERIAL PRIMARY KEY,
@@ -53,7 +50,7 @@ async function createUsersTable() {
                 template JSONB NOT NULL,
                 student_email VARCHAR(100) NOT NULL,
                 teacher_id INTEGER NOT NULL REFERENCES users(id),
-                status VARCHAR(50) DEFAULT 'Ожидает заполнения', -- Ожидает заполнения, Заполнено
+                status VARCHAR(50) DEFAULT 'Ожидает заполнения', 
                 submitted_data JSONB,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
@@ -62,7 +59,6 @@ async function createUsersTable() {
         console.log('Таблица documents успешно создана или уже существует.');
 
 
-        // Добавление тестового Куратора, если он не существует (Пароль: 123456)
         const curatorCheck = await pool.query('SELECT 1 FROM users WHERE email = $1', ['curator@vuz.ru']);
         if (curatorCheck.rowCount === 0) {
             const password = '123456';
@@ -112,7 +108,7 @@ function authenticateToken(req, res, next) {
 
     jwt.verify(token, SECRET_KEY, (err, userPayload) => {
         if (err) return res.sendStatus(403); 
-        req.user = userPayload; // req.user теперь содержит { id, name, role, email }
+        req.user = userPayload; 
         next(); 
     });
 }
@@ -135,7 +131,7 @@ function isTeacher(req, res, next) {
 }
 
 
-// --- 1. МАРШРУТ РЕГИСТРАЦИИ ---
+// --- 1. МАРШРУТ РЕГИСТРАЦИИ (БЕЗ ИЗМЕНЕНИЙ) ---
 app.post('/api/register', async (req, res) => {
     const { name, email, password } = req.body;
     
@@ -147,7 +143,6 @@ app.post('/api/register', async (req, res) => {
 
         const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
         
-        // Вставка нового пользователя в PostgreSQL (роль по умолчанию: Студент)
         await pool.query(
             'INSERT INTO users (name, email, hashedPassword, role) VALUES ($1, $2, $3, $4)',
             [name, email, hashedPassword, 'Студент'] 
@@ -160,7 +155,7 @@ app.post('/api/register', async (req, res) => {
     }
 });
 
-// --- 2. МАРШРУТ АВТОРИЗАЦИИ (ИСПРАВЛЕН: ДОБАВЛЕН EMAIL В JWT) ---
+// --- 2. МАРШРУТ АВТОРИЗАЦИИ (БЕЗ ИЗМЕНЕНИЙ) ---
 app.post('/api/login', async (req, res) => {
     const { email, password } = req.body;
     
@@ -174,7 +169,6 @@ app.post('/api/login', async (req, res) => {
         
         if (!isPasswordValid) return res.status(401).json({ success: false, message: 'Неверные данные.' });
 
-        // Генерация токена с ролью и EMAIL
         const token = jwt.sign(
             { id: user.id, name: user.name, role: user.role, email: user.email }, 
             SECRET_KEY, 
@@ -188,7 +182,7 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// --- 3. ЗАЩИЩЕННЫЙ МАРШРУТ (ПРИВЕТСТВИЕ) ---
+// --- 3. ЗАЩИЩЕННЫЙ МАРШРУТ (ПРИВЕТСТВИЕ) (БЕЗ ИЗМЕНЕНИЙ) ---
 app.get('/api/greeting', authenticateToken, (req, res) => {
     const userName = req.user.name;
     const userRole = req.user.role; 
@@ -201,7 +195,7 @@ app.get('/api/greeting', authenticateToken, (req, res) => {
     });
 });
 
-// --- 4. ЗАЩИЩЕННЫЙ МАРШРУТ (ИЗМЕНЕНИЕ РОЛИ) ---
+// --- 4. ЗАЩИЩЕННЫЙ МАРШРУТ (ИЗМЕНЕНИЕ РОЛИ) (БЕЗ ИЗМЕНЕНИЙ) ---
 app.put('/api/users/role', authenticateToken, isCurator, async (req, res) => {
     const { email, newRole } = req.body;
 
@@ -230,7 +224,7 @@ app.put('/api/users/role', authenticateToken, isCurator, async (req, res) => {
 });
 
 
-// --- 5. МАРШРУТ: ПОЛУЧЕНИЕ ВСЕХ ПОЛЬЗОВАТЕЛЕЙ (ТОЛЬКО ДЛЯ КУРАТОРА) ---
+// --- 5. МАРШРУТ: ПОЛУЧЕНИЕ ВСЕХ ПОЛЬЗОВАТЕЛЕЙ (БЕЗ ИЗМЕНЕНИЙ) ---
 app.get('/api/users', authenticateToken, isCurator, async (req, res) => {
     try {
         const result = await pool.query('SELECT id, name, email, role, hashedpassword FROM users ORDER BY id ASC');
@@ -246,15 +240,25 @@ app.get('/api/users', authenticateToken, isCurator, async (req, res) => {
 });
 
 
-// --- 6. МАРШРУТ: СОЗДАНИЕ НОВОГО ДОКУМЕНТА (ТОЛЬКО ДЛЯ ПРЕПОДАВАТЕЛЯ) ---
+// --- 6. МАРШРУТ: СОЗДАНИЕ НОВОГО ДОКУМЕНТА (ОБНОВЛЕНО ДЛЯ ОТЛАДКИ) ---
 app.post('/api/documents/create', authenticateToken, isTeacher, async (req, res) => {
     const { title, studentEmail, template } = req.body;
-    const teacherId = req.user.id;
+    let teacherId = req.user.id; // Используем let для возможности изменения
 
     if (!title || !studentEmail || !template) {
         return res.status(400).json({ success: false, message: "Отсутствуют обязательные поля: title, studentEmail, template." });
     }
     
+    // --- ИСПРАВЛЕНИЕ: ПРИВЕДЕНИЕ ID К ЧИСЛУ ---
+    if (typeof teacherId === 'string') {
+        teacherId = parseInt(teacherId, 10);
+    }
+    if (isNaN(teacherId)) {
+         console.error("Ошибка аутентификации: teacherId не является числом:", req.user.id);
+         return res.status(400).json({ success: false, message: "Ошибка аутентификации: ID преподавателя недействителен." });
+    }
+    
+    // Проверка существования студента
     const studentCheck = await pool.query('SELECT 1 FROM users WHERE email = $1 AND role = $2', [studentEmail, 'Студент']);
     if (studentCheck.rowCount === 0) {
         return res.status(404).json({ success: false, message: `Студент с email ${studentEmail} не найден.` });
@@ -272,19 +276,20 @@ app.post('/api/documents/create', authenticateToken, isTeacher, async (req, res)
             documentId: result.rows[0].id
         });
     } catch (error) {
-        console.error("Ошибка при создании документа:", error);
+        // --- УЛУЧШЕННОЕ ЛОГИРОВАНИЕ ОШИБКИ СЕРВЕРА ---
+        console.error("Ошибка при создании документа (SQL/Server):", error.message); 
+        console.error("Используемые данные:", { title, studentEmail, template: JSON.stringify(template).substring(0, 100) + '...', teacherId });
         res.status(500).json({ success: false, message: "Ошибка сервера при создании документа." });
     }
 });
 
 
-// --- 7. МАРШРУТ: ПОЛУЧЕНИЕ ДОКУМЕНТОВ ДЛЯ ЗАПОЛНЕНИЯ (ТОЛЬКО ДЛЯ СТУДЕНТА) ---
+// --- 7. МАРШРУТ: ПОЛУЧЕНИЕ ДОКУМЕНТОВ ДЛЯ ЗАПОЛНЕНИЯ (БЕЗ ИЗМЕНЕНИЙ) ---
 app.get('/api/documents/student', authenticateToken, async (req, res) => {
     if (req.user.role !== 'Студент') {
         return res.status(403).json({ success: false, message: "Доступ разрешен только для Студентов." });
     }
     
-    // Email студента берется прямо из JWT
     const studentEmail = req.user.email;
 
     try {
@@ -293,7 +298,6 @@ app.get('/api/documents/student', authenticateToken, async (req, res) => {
             [studentEmail]
         );
         
-        // Возвращаем только документы в статусе "Ожидает заполнения"
         res.status(200).json({ 
             success: true, 
             documents: documentsResult.rows.filter(doc => doc.status === 'Ожидает заполнения') 
@@ -305,7 +309,7 @@ app.get('/api/documents/student', authenticateToken, async (req, res) => {
     }
 });
 
-// --- 8. МАРШРУТ: ОТПРАВКА ЗАПОЛНЕННОГО ДОКУМЕНТА (ТОЛЬКО ДЛЯ СТУДЕНТА) ---
+// --- 8. МАРШРУТ: ОТПРАВКА ЗАПОЛНЕННОГО ДОКУМЕНТА (БЕЗ ИЗМЕНЕНИЙ) ---
 app.put('/api/documents/submit/:id', authenticateToken, async (req, res) => {
     if (req.user.role !== 'Студент') {
         return res.status(403).json({ success: false, message: "Доступ разрешен только для Студентов." });
