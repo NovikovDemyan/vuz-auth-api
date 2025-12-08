@@ -1,4 +1,4 @@
-// auth_api/server.js - ФИНАЛЬНАЯ ВЕРСИЯ С POSTGRESQL И ВСТРОЕННЫМИ ШАБЛОНАМИ
+// auth_api/server.js - ФИНАЛЬНАЯ ВЕРСИЯ С ПОЛНЫМ ФУНКЦИОНАЛОМ
 
 const express = require('express');
 const bcrypt = require('bcrypt');
@@ -28,7 +28,7 @@ const pool = new Pool({
     }
 });
 
-// --- ШАБЛОНЫ ДОКУМЕНТОВ (НОВАЯ СЕКЦИЯ) ---
+// --- ШАБЛОНЫ ДОКУМЕНТОВ ---
 const documentTemplates = {
     // 1. Заявление на Отпуск
     'Заявление на Отпуск': {
@@ -85,7 +85,6 @@ async function createUsersTable() {
         await pool.query(queryUsers);
         console.log('Таблица users успешно создана или уже существует.');
 
-        // --- ТАБЛИЦА DOCUMENTS (Убедитесь, что после DROP TABLE она будет создана корректно) ---
         const queryDocuments = `
             CREATE TABLE IF NOT EXISTS documents (
                 id SERIAL PRIMARY KEY,
@@ -174,7 +173,7 @@ function isTeacher(req, res, next) {
 }
 
 
-// --- 1-5. Маршруты (Без изменений) ---
+// --- 1-5. Маршруты Аутентификации и Пользователей (Без изменений) ---
 
 app.post('/api/register', async (req, res) => {
     const { name, email, password } = req.body;
@@ -279,26 +278,22 @@ app.get('/api/users', authenticateToken, isCurator, async (req, res) => {
 });
 
 
-// --- 6. МАРШРУТ: СОЗДАНИЕ НОВОГО ДОКУМЕНТА (ОБНОВЛЕНО: ЧТЕНИЕ ШАБЛОНА ИЗ documentTemplates) ---
+// --- 6. МАРШРУТ: СОЗДАНИЕ НОВОГО ДОКУМЕНТА (Преподаватель) ---
 app.post('/api/documents/create', authenticateToken, isTeacher, async (req, res) => {
     const { templateName, studentEmail, title } = req.body; 
 
-    // 1. Проверяем наличие шаблона в коде сервера
     const template = documentTemplates[templateName];
     if (!template) {
         return res.status(400).json({ success: false, message: `Шаблон с именем "${templateName}" не найден в коде сервера.` });
     }
 
-    // 2. Устанавливаем заголовок и ID преподавателя
     const finalTitle = title || templateName;
     const teacherId = req.user.id; 
     
-    // 3. Базовая проверка email студента
     if (!studentEmail) {
         return res.status(400).json({ success: false, message: "Отсутствует Email студента." });
     }
 
-    // 4. Проверка типа ID преподавателя (безопасность)
     let finalTeacherId = teacherId;
     if (typeof finalTeacherId === 'string') {
         finalTeacherId = parseInt(finalTeacherId, 10);
@@ -308,7 +303,6 @@ app.post('/api/documents/create', authenticateToken, isTeacher, async (req, res)
          return res.status(400).json({ success: false, message: "Ошибка аутентификации: ID преподавателя недействителен." });
     }
     
-    // 5. Проверка существования студента
     const studentCheck = await pool.query('SELECT 1 FROM users WHERE email = $1 AND role = $2', [studentEmail, 'Студент']);
     if (studentCheck.rowCount === 0) {
         return res.status(404).json({ success: false, message: `Студент с email ${studentEmail} не найден.` });
@@ -317,7 +311,7 @@ app.post('/api/documents/create', authenticateToken, isTeacher, async (req, res)
     try {
         const result = await pool.query(
             'INSERT INTO documents (title, student_email, template, teacher_id) VALUES ($1, $2, $3, $4) RETURNING id',
-            [finalTitle, studentEmail, template, finalTeacherId] // template теперь JSON-объект
+            [finalTitle, studentEmail, template, finalTeacherId]
         );
 
         res.status(201).json({ 
@@ -333,7 +327,7 @@ app.post('/api/documents/create', authenticateToken, isTeacher, async (req, res)
 });
 
 
-// --- 7. МАРШРУТ: ПОЛУЧЕНИЕ ДОКУМЕНТОВ ДЛЯ ЗАПОЛНЕНИЯ (Без изменений) ---
+// --- 7. МАРШРУТ: ПОЛУЧЕНИЕ ДОКУМЕНТОВ ДЛЯ ЗАПОЛНЕНИЯ (Студент) ---
 app.get('/api/documents/student', authenticateToken, async (req, res) => {
     if (req.user.role !== 'Студент') {
         return res.status(403).json({ success: false, message: "Доступ разрешен только для Студентов." });
@@ -343,13 +337,13 @@ app.get('/api/documents/student', authenticateToken, async (req, res) => {
 
     try {
         const documentsResult = await pool.query(
-            'SELECT id, title, template, status, submitted_data FROM documents WHERE student_email = $1 ORDER BY created_at DESC',
-            [studentEmail]
+            'SELECT id, title, template, status, submitted_data FROM documents WHERE student_email = $1 AND status = $2 ORDER BY created_at DESC',
+            [studentEmail, 'Ожидает заполнения']
         );
         
         res.status(200).json({ 
             success: true, 
-            documents: documentsResult.rows.filter(doc => doc.status === 'Ожидает заполнения') 
+            documents: documentsResult.rows 
         });
 
     } catch (error) {
@@ -358,7 +352,7 @@ app.get('/api/documents/student', authenticateToken, async (req, res) => {
     }
 });
 
-// --- 8. МАРШРУТ: ОТПРАВКА ЗАПОЛНЕННОГО ДОКУМЕНТА (Без изменений) ---
+// --- 8. МАРШРУТ: ОТПРАВКА ЗАПОЛНЕННОГО ДОКУМЕНТА (Студент) ---
 app.put('/api/documents/submit/:id', authenticateToken, async (req, res) => {
     if (req.user.role !== 'Студент') {
         return res.status(403).json({ success: false, message: "Доступ разрешен только для Студентов." });
@@ -375,6 +369,7 @@ app.put('/api/documents/submit/:id', authenticateToken, async (req, res) => {
 
     try {
         const result = await pool.query(
+            // Статус меняется на 'Заполнено', чтобы документ ушел к куратору
             'UPDATE documents SET status = $1, submitted_data = $2 WHERE id = $3 AND student_email = $4 RETURNING id',
             ['Заполнено', filledData, documentId, studentEmail]
         );
@@ -385,11 +380,104 @@ app.put('/api/documents/submit/:id', authenticateToken, async (req, res) => {
 
         res.status(200).json({ 
             success: true, 
-            message: `Документ "${documentId}" успешно заполнен и отправлен.` 
+            message: `Документ "${documentId}" успешно заполнен и отправлен Куратору.` 
         });
     } catch (error) {
         console.error("Ошибка при отправке заполненного документа:", error);
         res.status(500).json({ success: false, message: "Ошибка сервера при отправке документа." });
+    }
+});
+
+
+// --- 9. МАРШРУТ: ПОЛУЧЕНИЕ ЗАПОЛНЕННЫХ ДОКУМЕНТОВ ДЛЯ КУРАТОРА (НОВЫЙ) ---
+app.get('/api/documents/curator', authenticateToken, isCurator, async (req, res) => {
+    try {
+        // Запрос всех документов со статусом "Заполнено" с присоединением имен пользователей
+        const documentsResult = await pool.query(
+            `
+            SELECT 
+                d.id, d.title, d.status, d.submitted_data, d.created_at,
+                u_student.name AS student_name, u_student.email AS student_email,
+                u_teacher.name AS teacher_name
+            FROM documents d
+            JOIN users u_student ON d.student_email = u_student.email
+            JOIN users u_teacher ON d.teacher_id = u_teacher.id
+            WHERE d.status = $1 
+            ORDER BY d.created_at DESC
+            `,
+            ['Заполнено']
+        );
+        
+        res.status(200).json({ 
+            success: true, 
+            documents: documentsResult.rows 
+        });
+
+    } catch (error) {
+        console.error("Ошибка получения заполненных документов для куратора:", error);
+        res.status(500).json({ success: false, message: "Ошибка сервера при получении документов." });
+    }
+});
+
+
+// --- 10. МАРШРУТ: СКАЧИВАНИЕ ЗАПОЛНЕННОГО ДОКУМЕНТА (НОВЫЙ) ---
+app.get('/api/documents/download/:id', authenticateToken, isCurator, async (req, res) => {
+    const documentId = req.params.id;
+
+    try {
+        const result = await pool.query(
+            `
+            SELECT 
+                d.title, d.submitted_data, d.created_at,
+                u_student.name AS student_name, u_teacher.name AS teacher_name
+            FROM documents d
+            JOIN users u_student ON d.student_email = u_student.email
+            JOIN users u_teacher ON d.teacher_id = u_teacher.id
+            WHERE d.id = $1 AND d.status = $2
+            `,
+            [documentId, 'Заполнено']
+        );
+
+        const doc = result.rows[0];
+
+        if (!doc) {
+            return res.status(404).json({ success: false, message: "Заполненный документ не найден." });
+        }
+
+        // --- ГЕНЕРАЦИЯ ТЕКСТОВОГО СОДЕРЖИМОГО (ИМИТАЦИЯ PDF) ---
+        let content = `--- ДОКУМЕНТ ВУЗА: ${doc.title.toUpperCase()} ---\n\n`;
+        content += `Дата заполнения: ${new Date(doc.created_at).toLocaleString('ru-RU')}\n`;
+        content += `Студент: ${doc.student_name}\n`;
+        content += `Преподаватель (инициатор): ${doc.teacher_name}\n`;
+        content += `-----------------------------------------------------------\n\n`;
+
+        // Форматирование заполненных данных
+        if (doc.submitted_data) {
+            const data = doc.submitted_data;
+            for (const key in data) {
+                if (Object.hasOwnProperty.call(data, key)) {
+                    // Форматируем ключ для лучшей читаемости
+                    const formattedKey = key.replace(/_/g, ' '); 
+                    content += `${formattedKey.toUpperCase()}: ${data[key]}\n`;
+                }
+            }
+        } else {
+             content += "ВНИМАНИЕ: Заполненные данные отсутствуют.\n";
+        }
+        
+        content += `\n-----------------------------------------------------------\n`;
+        content += `\nПодпись студента: ____________________\n`;
+
+
+        // Отправка файла как plain text (TXT) с кодировкой UTF-8
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8'); 
+        res.setHeader('Content-Disposition', `attachment; filename="${doc.title}_${doc.student_name}_ID${documentId}.txt"`);
+        
+        res.send(content);
+
+    } catch (error) {
+        console.error("Ошибка при скачивании документа:", error);
+        res.status(500).json({ success: false, message: "Ошибка сервера при подготовке файла." });
     }
 });
 
