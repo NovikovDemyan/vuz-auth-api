@@ -1,4 +1,4 @@
-// auth_api/server.js - ФИНАЛЬНАЯ ВЕРСИЯ С ПОЛНЫМ ЦИКЛОМ ДОКУМЕНТООБОРОТА
+// auth_api/server.js - ФИНАЛЬНАЯ ИСПРАВЛЕННАЯ ВЕРСИЯ
 
 const express = require('express');
 const bcrypt = require('bcrypt');
@@ -41,7 +41,7 @@ const documentTemplates = {
             { type: "text", content: ". Приказ о согласовании №" },
             { type: "input", name: "Номер_Приказа_Ректора", role: "Преподаватель" }, 
             { type: "text", content: " от " },
-            { type: "input", name: "Дата_Приказа_Ректора", role: "Преподаватель" }, // Добавлено для финальной проверки
+            { type: "input", name: "Дата_Приказа_Ректора", role: "Преподаватель" }, 
             { type: "text", content: "." }
         ]
     },
@@ -109,42 +109,24 @@ async function createUsersTable() {
         console.log('Таблица documents успешно создана или уже существует.');
 
 
-        // Добавление тестового Куратора, если он не существует (Пароль: 123456)
-        const curatorCheck = await pool.query('SELECT 1 FROM users WHERE email = $1', ['curator@vuz.ru']);
-        if (curatorCheck.rowCount === 0) {
-            const password = '123456';
-            const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS); 
-            await pool.query(
-                'INSERT INTO users (name, email, hashedPassword, role) VALUES ($1, $2, $3, $4)',
-                ['Куратор Иван', 'curator@vuz.ru', hashedPassword, 'Куратор']
-            );
-            console.log('Тестовый Куратор (curator@vuz.ru) добавлен. Пароль: 123456');
-        }
-        
-        // Добавление тестового Преподавателя (Пароль: 123456)
-        const teacherCheck = await pool.query('SELECT 1 FROM users WHERE email = $1', ['teacher@vuz.ru']);
-        if (teacherCheck.rowCount === 0) {
-            const password = '123456';
-            const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS); 
-            await pool.query(
-                'INSERT INTO users (name, email, hashedPassword, role) VALUES ($1, $2, $3, $4)',
-                ['Преподаватель Петр', 'teacher@vuz.ru', hashedPassword, 'Преподаватель']
-            );
-            console.log('Тестовый Преподаватель (teacher@vuz.ru) добавлен. Пароль: 123456');
-        }
-        
-        // Добавление тестового Студента (Пароль: 123456)
-        const studentCheck = await pool.query('SELECT 1 FROM users WHERE email = $1', ['student@vuz.ru']);
-        if (studentCheck.rowCount === 0) {
-            const password = '123456';
-            const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS); 
-            await pool.query(
-                'INSERT INTO users (name, email, hashedPassword, role) VALUES ($1, $2, $3, $4)',
-                ['Студент Антон', 'student@vuz.ru', hashedPassword, 'Студент']
-            );
-            console.log('Тестовый Студент (student@vuz.ru) добавлен. Пароль: 123456');
-        }
+        // Добавление тестовых пользователей
+        const usersToInsert = [
+            { name: 'Куратор Иван', email: 'curator@vuz.ru', role: 'Куратор' },
+            { name: 'Преподаватель Петр', email: 'teacher@vuz.ru', role: 'Преподаватель' },
+            { name: 'Студент Антон', email: 'student@vuz.ru', role: 'Студент' }
+        ];
 
+        for (const user of usersToInsert) {
+            const check = await pool.query('SELECT 1 FROM users WHERE email = $1', [user.email]);
+            if (check.rowCount === 0) {
+                const hashedPassword = await bcrypt.hash('123456', SALT_ROUNDS); 
+                await pool.query(
+                    'INSERT INTO users (name, email, hashedPassword, role) VALUES ($1, $2, $3, $4)',
+                    [user.name, user.email, hashedPassword, user.role]
+                );
+                console.log(`Тестовый пользователь (${user.email}, ${user.role}) добавлен. Пароль: 123456`);
+            }
+        }
     } catch (err) {
         console.error('Ошибка создания таблиц:', err);
     }
@@ -152,7 +134,7 @@ async function createUsersTable() {
 createUsersTable();
 
 
-// --- НАСТРОЙКА CORS и MIDDLEWARE (Без изменений) ---
+// --- НАСТРОЙКА CORS и MIDDLEWARE ---
 const allowedOrigins = [
     // !!! ДОЛЖЕН БЫТЬ ТОЧНО ЭТОТ АДРЕС ИЗ КОНСОЛИ !!!
     'https://vuz-portal-frontend.onrender.com', 
@@ -205,7 +187,7 @@ function isTeacher(req, res, next) {
 }
 
 
-// --- МАРШРУТЫ АУТЕНТИФИКАЦИИ И УПРАВЛЕНИЯ РОЛЯМИ (Без изменений) ---
+// --- МАРШРУТЫ АУТЕНТИФИКАЦИИ И УПРАВЛЕНИЯ РОЛЯМИ ---
 
 app.post('/api/register', async (req, res) => {
     const { name, email, password } = req.body;
@@ -363,9 +345,8 @@ app.get('/api/documents/student', authenticateToken, async (req, res) => {
 
     try {
         const documentsResult = await pool.query(
-            // Студент видит документы в статусах 'Ожидает заполнения' и 'Заполнено' (чтобы видеть свой результат)
-            'SELECT id, title, template, status, submitted_data FROM documents WHERE student_email = $1 AND status IN ($2, $3) ORDER BY created_at DESC',
-            [studentEmail, 'Ожидает заполнения', 'Заполнено'] 
+            'SELECT id, title, template, status, submitted_data FROM documents WHERE student_email = $1 AND status IN ($2, $3, $4) ORDER BY created_at DESC',
+            [studentEmail, 'Ожидает заполнения', 'Заполнено', 'Завершено'] // Студент видит все свои документы
         );
         
         res.status(200).json({ 
@@ -465,7 +446,6 @@ app.put('/api/documents/finalize/:id', authenticateToken, isTeacher, async (req,
     }
 
     try {
-        // 1. Получаем текущие данные (заполненные студентом)
         const currentDoc = await pool.query(
             'SELECT submitted_data, status FROM documents WHERE id = $1 AND teacher_id = $2',
             [documentId, teacherId]
@@ -477,7 +457,6 @@ app.put('/api/documents/finalize/:id', authenticateToken, isTeacher, async (req,
         
         const existingData = currentDoc.rows[0].submitted_data || {};
         
-        // 2. Объединяем существующие данные с финальными данными преподавателя
         const finalSubmittedData = { ...existingData, ...finalTeacherData };
         
         // 3. Обновляем документ и меняем статус на "Завершено"
@@ -503,7 +482,7 @@ app.get('/api/documents/curator', authenticateToken, isCurator, async (req, res)
     try {
         // Куратор видит все документы
         const documentsResult = await pool.query(
-            `SELECT id, title, student_email, template, status, submitted_data, created_at 
+            `SELECT id, title, student_email, template, status, submitted_data, created_at, teacher_id 
              FROM documents 
              ORDER BY created_at DESC`
         );
