@@ -1,4 +1,4 @@
-// auth_api/server.js - ФИНАЛЬНАЯ ВЕРСИЯ С ФУНКЦИЕЙ СКАЧИВАНИЯ DOCX
+// auth_api/server.js - ФИНАЛЬНАЯ ВЕРСИЯ С POSTGRESQL И РАЗДЕЛЕНИЕМ ПОЛЕЙ ПО РОЛЯМ
 
 const express = require('express');
 const bcrypt = require('bcrypt');
@@ -6,9 +6,6 @@ const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const { Pool } = require('pg'); 
 require('dotenv').config();
-
-// НОВЫЙ ИМПОРТ ДЛЯ РАБОТЫ С DOCX (требует npm install docx)
-const { Document, Packer, Paragraph, TextRun, AlignmentType, HeadingLevel } = require('docx'); 
 
 const app = express();
 const port = process.env.PORT || 3000; 
@@ -31,8 +28,9 @@ const pool = new Pool({
     }
 });
 
-// --- ШАБЛОНЫ ДОКУМЕНТОВ ---
+// --- ШАБЛОНЫ ДОКУМЕНТОВ (ОБНОВЛЕННАЯ СЕКЦИЯ: Добавлено role: 'Студент'/'Преподаватель') ---
 const documentTemplates = {
+    // 1. Заявление на Отпуск
     'Заявление на Отпуск': {
         parts: [
             { type: "text", content: "Я, Студент " },
@@ -42,45 +40,41 @@ const documentTemplates = {
             { type: "text", content: " по " },
             { type: "input", name: "Дата_Окончания", role: "Студент" },
             { type: "text", content: ". Приказ о согласовании №" },
-            { type: "input", name: "Номер_Приказа_Ректора", role: "Преподаватель" }, 
-            { type: "text", content: " от " },
-            { type: "input", name: "Дата_Приказа_Ректора", role: "Преподаватель" }, 
+            { type: "input", name: "Номер_Приказа_Ректора", role: "Преподаватель" }, // Заполняет Преподаватель
             { type: "text", content: "." }
         ]
     },
+    // 2. Уведомление о Задолженности
     'Уведомление о Задолженности': {
         parts: [
             { type: "text", content: "Уважаемый Студент " },
             { type: "input", name: "Фамилия_Имя", role: "Студент" },
             { type: "text", content: "! У вас имеется задолженность по предмету " },
-            { type: "input", name: "Название_Предмета", role: "Преподаватель" }, 
+            { type: "input", name: "Название_Предмета", role: "Преподаватель" }, // Заполняет Преподаватель
             { type: "text", content: ". Текущий долг: " },
             { type: "input", name: "Тема_Долга", role: "Студент" },
             { type: "text", content: ". Крайний срок сдачи до " },
-            { type: "input", name: "Крайний_Срок", role: "Преподаватель" }, 
-            { type: "text", content: ". Статус проверки Куратором: " },
-            { type: "input", name: "Статус_Куратора", role: "Преподаватель" },
+            { type: "input", name: "Крайний_Срок", role: "Преподаватель" }, // Заполняет Преподаватель
             { type: "text", content: "." }
         ]
     },
+    // 3. Запрос на Смену Руководителя
     'Запрос на Смену Руководителя': {
         parts: [
             { type: "text", content: "Прошу разрешить мне, студенту " },
             { type: "input", name: "Фамилия_Имя", role: "Студент" },
             { type: "text", content: ", сменить научного руководителя дипломного проекта с " },
-            { type: "input", name: "Текущий_Руководитель", role: "Преподаватель" }, 
+            { type: "input", name: "Текущий_Руководитель", role: "Преподаватель" }, // Заполняет Преподаватель
             { type: "text", content: " на " },
-            { type: "input", name: "Новый_Руководитель", role: "Преподаватель" }, 
+            { type: "input", name: "Новый_Руководитель", role: "Преподаватель" }, // Заполняет Преподаватель
             { type: "text", content: ". Причина, указанная студентом: " },
             { type: "input", name: "Причина_Смены", role: "Студент" },
-            { type: "text", content: ". Дата утверждения: " },
-            { type: "input", name: "Дата_Утверждения_Декана", role: "Преподаватель" },
             { type: "text", content: "." }
         ]
     }
 };
 
-// Функция для создания таблиц (без изменений)
+// Функция для создания таблиц (без изменений, кроме создания)
 async function createUsersTable() {
     try {
         const queryUsers = `
@@ -104,7 +98,7 @@ async function createUsersTable() {
                 student_email VARCHAR(100) NOT NULL,
                 teacher_id INTEGER NOT NULL REFERENCES users(id),
                 status VARCHAR(50) DEFAULT 'Ожидает заполнения', 
-                submitted_data JSONB, 
+                submitted_data JSONB, // Хранит заполненные данные (сначала Преподавателем, потом Студентом)
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
         `;
@@ -112,24 +106,18 @@ async function createUsersTable() {
         console.log('Таблица documents успешно создана или уже существует.');
 
 
-        // Добавление тестовых пользователей
-        const usersToInsert = [
-            { name: 'Куратор Иван', email: 'curator@vuz.ru', role: 'Куратор' },
-            { name: 'Преподаватель Петр', email: 'teacher@vuz.ru', role: 'Преподаватель' },
-            { name: 'Студент Антон', email: 'student@vuz.ru', role: 'Студент' }
-        ];
-
-        for (const user of usersToInsert) {
-            const check = await pool.query('SELECT 1 FROM users WHERE email = $1', [user.email]);
-            if (check.rowCount === 0) {
-                const hashedPassword = await bcrypt.hash('123456', SALT_ROUNDS); 
-                await pool.query(
-                    'INSERT INTO users (name, email, hashedPassword, role) VALUES ($1, $2, $3, $4)',
-                    [user.name, user.email, hashedPassword, user.role]
-                );
-                console.log(`Тестовый пользователь (${user.email}, ${user.role}) добавлен. Пароль: 123456`);
-            }
+        // Добавление тестового Куратора, если он не существует (Пароль: 123456)
+        const curatorCheck = await pool.query('SELECT 1 FROM users WHERE email = $1', ['curator@vuz.ru']);
+        if (curatorCheck.rowCount === 0) {
+            const password = '123456';
+            const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS); 
+            await pool.query(
+                'INSERT INTO users (name, email, hashedPassword, role) VALUES ($1, $2, $3, $4)',
+                ['Куратор Иван', 'curator@vuz.ru', hashedPassword, 'Куратор']
+            );
+            console.log('Тестовый Куратор (curator@vuz.ru) добавлен. Пароль: 123456');
         }
+
     } catch (err) {
         console.error('Ошибка создания таблиц:', err);
     }
@@ -137,7 +125,7 @@ async function createUsersTable() {
 createUsersTable();
 
 
-// --- НАСТРОЙКА CORS и MIDDLEWARE ---
+// --- НАСТРОЙКА CORS и MIDDLEWARE (Без изменений) ---
 const allowedOrigins = [
     // !!! ДОЛЖЕН БЫТЬ ТОЧНО ЭТОТ АДРЕС ИЗ КОНСОЛИ !!!
     'https://vuz-portal-frontend.onrender.com', 
@@ -160,7 +148,7 @@ app.use(cors(corsOptions));
 app.use(express.json()); 
 
 
-// --- MIDDLEWARE ПРОВЕРКИ JWT и РОЛИ ---
+// --- MIDDLEWARE ПРОВЕРКИ JWT и РОЛИ (Без изменений) ---
 function authenticateToken(req, res, next) {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1]; 
@@ -190,7 +178,7 @@ function isTeacher(req, res, next) {
 }
 
 
-// --- МАРШРУТЫ АУТЕНТИФИКАЦИИ И УПРАВЛЕНИЯ РОЛЯМИ ---
+// --- 1-5. Маршруты Аутентификации и Управления Ролями (Без изменений) ---
 
 app.post('/api/register', async (req, res) => {
     const { name, email, password } = req.body;
@@ -295,7 +283,7 @@ app.get('/api/users', authenticateToken, isCurator, async (req, res) => {
 });
 
 
-// --- 6. МАРШРУТ: СОЗДАНИЕ НОВОГО ДОКУМЕНТА (ПРЕПОДАВАТЕЛЬ) ---
+// --- 6. МАРШРУТ: СОЗДАНИЕ НОВОГО ДОКУМЕНТА (ОБНОВЛЕНО: Принимает teacherData) ---
 app.post('/api/documents/create', authenticateToken, isTeacher, async (req, res) => {
     const { templateName, studentEmail, title, teacherData } = req.body; 
 
@@ -323,7 +311,7 @@ app.post('/api/documents/create', authenticateToken, isTeacher, async (req, res)
     try {
         const result = await pool.query(
             'INSERT INTO documents (title, student_email, template, teacher_id, submitted_data) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-            [finalTitle, studentEmail, template, finalTeacherId, teacherData || {}] 
+            [finalTitle, studentEmail, template, finalTeacherId, teacherData || {}] // Сохраняем заполненные Преподавателем данные
         );
 
         res.status(201).json({ 
@@ -348,13 +336,14 @@ app.get('/api/documents/student', authenticateToken, async (req, res) => {
 
     try {
         const documentsResult = await pool.query(
-            'SELECT id, title, template, status, submitted_data FROM documents WHERE student_email = $1 AND status IN ($2, $3, $4) ORDER BY created_at DESC',
-            [studentEmail, 'Ожидает заполнения', 'Заполнено', 'Завершено'] // Студент видит все свои документы
+            'SELECT id, title, template, status, submitted_data FROM documents WHERE student_email = $1 ORDER BY created_at DESC',
+            [studentEmail]
         );
         
+        // Отправляем документы, которые ожидают заполнения (статус 'Ожидает заполнения')
         res.status(200).json({ 
             success: true, 
-            documents: documentsResult.rows
+            documents: documentsResult.rows.filter(doc => doc.status === 'Ожидает заполнения') 
         });
 
     } catch (error) {
@@ -380,21 +369,22 @@ app.put('/api/documents/submit/:id', authenticateToken, async (req, res) => {
     const studentEmail = req.user.email;
 
     try {
+        // 1. Получаем текущие данные (заполненные преподавателем)
         const currentDoc = await pool.query(
-            'SELECT submitted_data FROM documents WHERE id = $1 AND student_email = $2 AND status = $3',
-            [documentId, studentEmail, 'Ожидает заполнения']
+            'SELECT submitted_data FROM documents WHERE id = $1 AND student_email = $2',
+            [documentId, studentEmail]
         );
 
         if (currentDoc.rowCount === 0) {
-            return res.status(404).json({ success: false, message: `Документ с ID ${documentId} не найден, не предназначен для вас или уже заполнен.` });
+            return res.status(404).json({ success: false, message: `Документ с ID ${documentId} не найден или не предназначен для вас.` });
         }
         
         const existingData = currentDoc.rows[0].submitted_data || {};
         
-        // Объединяем старые и новые данные
+        // 2. Объединяем старые и новые данные
         const finalSubmittedData = { ...existingData, ...studentData };
         
-        // Обновляем статус на "Заполнено" (Ожидает финальной проверки Преподавателя)
+        // 3. Обновляем документ
         const result = await pool.query(
             'UPDATE documents SET status = $1, submitted_data = $2 WHERE id = $3 AND student_email = $4 RETURNING id',
             ['Заполнено', finalSubmittedData, documentId, studentEmail]
@@ -403,7 +393,7 @@ app.put('/api/documents/submit/:id', authenticateToken, async (req, res) => {
 
         res.status(200).json({ 
             success: true, 
-            message: `Документ "${documentId}" успешно заполнен и отправлен Преподавателю на проверку.` 
+            message: `Документ "${documentId}" успешно заполнен и отправлен.` 
         });
     } catch (error) {
         console.error("Ошибка при отправке заполненного документа:", error);
@@ -418,6 +408,7 @@ app.get('/api/documents/teacher', authenticateToken, isTeacher, async (req, res)
     const teacherId = req.user.id; 
 
     try {
+        // Получаем ВСЕ документы, созданные данным преподавателем (по teacher_id)
         const documentsResult = await pool.query(
             `SELECT id, title, student_email, template, status, submitted_data, created_at 
              FROM documents 
@@ -438,184 +429,54 @@ app.get('/api/documents/teacher', authenticateToken, isTeacher, async (req, res)
 });
 
 
-// --- МАРШРУТ: ФИНАЛИЗАЦИЯ/УТВЕРЖДЕНИЕ ДОКУМЕНТА (ПРЕПОДАВАТЕЛЬ) ---
-app.put('/api/documents/finalize/:id', authenticateToken, isTeacher, async (req, res) => {
+// --- 10. МАРШРУТ: СКАЧИВАНИЕ ФИНАЛЬНОГО ДОКУМЕНТА (КУРАТОР/ПРЕПОДАВАТЕЛЬ) ---
+app.get('/api/documents/download/:id', authenticateToken, isTeacher, async (req, res) => {
     const documentId = req.params.id;
-    const { finalTeacherData } = req.body; 
-    const teacherId = req.user.id;
-
-    if (!finalTeacherData || Object.keys(finalTeacherData).length === 0) {
-         return res.status(400).json({ success: false, message: "Отсутствуют финальные данные для заполнения." });
-    }
 
     try {
-        const currentDoc = await pool.query(
-            'SELECT submitted_data, status FROM documents WHERE id = $1 AND teacher_id = $2',
-            [documentId, teacherId]
-        );
-
-        if (currentDoc.rowCount === 0) {
-            return res.status(404).json({ success: false, message: `Документ с ID ${documentId} не найден или не принадлежит вам.` });
-        }
-        
-        const existingData = currentDoc.rows[0].submitted_data || {};
-        
-        // Объединяем старые и новые данные
-        const finalSubmittedData = { ...existingData, ...finalTeacherData };
-        
-        // 3. Обновляем документ и меняем статус на "Завершено"
-        const result = await pool.query(
-            'UPDATE documents SET status = $1, submitted_data = $2 WHERE id = $3 AND teacher_id = $4 RETURNING id',
-            ['Завершено', finalSubmittedData, documentId, teacherId]
-        );
-
-        res.status(200).json({ 
-            success: true, 
-            message: `Документ "${documentId}" успешно завершен и утвержден. Теперь он виден Куратору.` 
-        });
-    } catch (error) {
-        console.error("Ошибка при финализации документа:", error);
-        res.status(500).json({ success: false, message: "Ошибка сервера при финализации документа." });
-    }
-});
-
-
-// --- МАРШРУТ: ПОЛУЧЕНИЕ ВСЕХ ДОКУМЕНТОВ (КУРАТОР) ---
-app.get('/api/documents/curator', authenticateToken, isCurator, async (req, res) => {
-    
-    try {
-        const documentsResult = await pool.query(
-            `SELECT id, title, student_email, template, status, submitted_data, created_at, teacher_id 
-             FROM documents 
-             ORDER BY created_at DESC`
-        );
-        
-        res.status(200).json({ 
-            success: true, 
-            documents: documentsResult.rows 
-        });
-
-    } catch (error) {
-        console.error("Ошибка получения документов для Куратора:", error);
-        res.status(500).json({ success: false, message: "Ошибка сервера при получении документов." });
-    }
-});
-
-
-// --- ИЗМЕНЕННЫЙ МАРШРУТ: СКАЧИВАНИЕ ДОКУМЕНТА (КУРАТОР) - ГЕНЕРАЦИЯ DOCX ---
-app.get('/api/documents/download/:id', authenticateToken, isCurator, async (req, res) => {
-    const documentId = parseInt(req.params.id);
-
-    try {
-        // Получаем документ, включая email преподавателя и имя студента
-        const result = await pool.query(
-            `SELECT d.title, d.status, d.submitted_data, d.template, d.created_at, u.email as teacher_email, u2.name as student_name
+        // Проверяем, что документ существует, заполнен и принадлежит данному преподавателю
+        const docResult = await pool.query(
+            `SELECT d.title, d.submitted_data, d.template
              FROM documents d
-             JOIN users u ON d.teacher_id = u.id
-             JOIN users u2 ON d.student_email = u2.email
-             WHERE d.id = $1`,
-            [documentId]
+             WHERE d.id = $1 AND d.teacher_id = $2 AND d.status = 'Заполнено'`,
+            [documentId, req.user.id]
         );
 
-        if (result.rowCount === 0) {
-            return res.status(404).json({ success: false, message: "Документ не найден." });
+        const doc = docResult.rows[0];
+
+        if (!doc) {
+            return res.status(404).json({ success: false, message: `Документ с ID ${documentId} не найден, не заполнен или не предназначен для вас.` });
         }
 
-        const doc = result.rows[0];
-        const templateParts = doc.template.parts;
         const submittedData = doc.submitted_data || {};
-        const createdAt = new Date(doc.created_at).toLocaleString('ru-RU');
+        const templateParts = doc.template.parts || [];
         
-        // --- 1. Создание элементов DOCX ---
-        const docxContent = [
-            new Paragraph({
-                text: `Портал ВУЗа - Документ: ${doc.title}`,
-                heading: HeadingLevel.HEADING_1,
-                alignment: AlignmentType.CENTER,
-                spacing: { before: 200, after: 200 }
-            }),
-             new Paragraph({
-                text: `ID Документа: ${documentId} | Статус: ${doc.status} | Создан: ${createdAt}`,
-                alignment: AlignmentType.LEFT,
-                spacing: { after: 100 }
-            }),
-             new Paragraph({
-                text: `Студент: ${doc.student_name} (${doc.student_email}) | Преподаватель (Создатель): ${doc.teacher_email}`,
-                alignment: AlignmentType.LEFT,
-                spacing: { after: 200 }
-            }),
-            new Paragraph({ text: '=================================================================' }),
-        ];
-
-        // --- 2. Форматирование содержания на основе шаблона и заполненных данных ---
+        let fileContent = `--- Документ: ${doc.title} (ID: ${documentId}) ---\n\n`;
+        
+        // 1. Форматируем контент, объединяя текст и заполненные данные
         templateParts.forEach(part => {
             if (part.type === 'text') {
-                // Обычный текст
-                docxContent.push(new Paragraph({
-                    children: [
-                        new TextRun(part.content)
-                    ],
-                    spacing: { after: 100 }
-                }));
+                fileContent += part.content.trim() + ' ';
             } else if (part.type === 'input') {
-                const value = submittedData[part.name];
-                const displayValue = value || `[${part.name} (НЕ ЗАПОЛНЕН)]`;
-                
-                // Выделение заполненного поля жирным шрифтом и курсивом
-                docxContent.push(new Paragraph({
-                    children: [
-                        new TextRun({
-                            text: `${part.name} (${part.role}): `,
-                            bold: true,
-                        }),
-                        new TextRun({
-                            text: displayValue,
-                            bold: true,
-                            italics: true,
-                            color: value ? "004085" : "FF0000" // Синий, если заполнено, Красный, если нет
-                        })
-                    ],
-                    spacing: { after: 100 }
-                }));
+                const value = submittedData[part.name] || `[НЕ ЗАПОЛНЕНО: ${part.name} (${part.role})]`;
+                fileContent += `${value} `;
             }
         });
         
-        docxContent.push(new Paragraph({ text: '=================================================================' }));
-        docxContent.push(new Paragraph({ text: 'ФИНАЛЬНЫЕ ДАННЫЕ (RAW JSON):', heading: HeadingLevel.HEADING_3 }));
+        fileContent += `\n\n--------------------------------------------\n`;
+        fileContent += `Дата формирования: ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`;
+
+
+        // 2. Отправляем файл
+        const filename = `${doc.title.replace(/\s/g, '_')}_ID${documentId}.txt`;
         
-        // Добавление RAW JSON в виде моноширинного текста
-        docxContent.push(new Paragraph({
-            children: [
-                new TextRun({
-                    text: JSON.stringify(submittedData, null, 2),
-                    font: 'Courier New',
-                    size: 18, // 9pt
-                })
-            ]
-        }));
-
-
-        // --- 3. Генерация DOCX ---
-        const document = new Document({
-            sections: [{
-                children: docxContent,
-            }],
-        });
-
-        // Преобразование документа в бинарный буфер
-        const buffer = await Packer.toBuffer(document);
-
-        // --- 4. Отправка ответа ---
-        const filename = `${doc.title}_ID${documentId}_${new Date().toISOString().slice(0, 10)}.docx`;
-        // Устанавливаем заголовок Content-Type для DOCX
         res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-        
-        res.send(buffer);
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.send(fileContent);
 
     } catch (error) {
         console.error("Ошибка при скачивании документа:", error);
-        res.status(500).json({ success: false, message: "Ошибка при генерации или скачивании DOCX." });
+        res.status(500).json({ success: false, message: "Ошибка сервера при скачивании документа." });
     }
 });
 
