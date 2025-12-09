@@ -28,7 +28,7 @@ const pool = new Pool({
     }
 });
 
-// --- ШАБЛОНЫ ДОКУМЕНТОВ (ОБНОВЛЕННЫЙ: Добавлено финальное поле Преподавателя в первом шаблоне) ---
+// --- ШАБЛОНЫ ДОКУМЕНТОВ ---
 const documentTemplates = {
     'Заявление на Отпуск': {
         parts: [
@@ -72,7 +72,7 @@ const documentTemplates = {
     }
 };
 
-// Функция для создания таблиц (ОБНОВЛЕНА: добавлено teacher_comment)
+// Функция для создания таблиц 
 async function createUsersTable() {
     try {
         const queryUsers = `
@@ -95,13 +95,12 @@ async function createUsersTable() {
                 teacher_id INTEGER NOT NULL REFERENCES users(id),
                 status VARCHAR(50) DEFAULT 'Ожидает заполнения', 
                 submitted_data JSONB, 
-                teacher_comment TEXT, -- НОВОЕ ПОЛЕ ДЛЯ КОММЕНТАРИЯ ПРЕПОДАВАТЕЛЯ
+                teacher_comment TEXT, 
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
         `;
         await pool.query(queryDocuments);
         
-        // Попытка добавить поле, если оно не существует
         try {
             await pool.query("ALTER TABLE documents ADD COLUMN IF NOT EXISTS teacher_comment TEXT");
         } catch(err) {
@@ -125,7 +124,7 @@ async function createUsersTable() {
 createUsersTable();
 
 
-// --- НАСТРОЙКА CORS и MIDDLEWARE (Без изменений) ---
+// --- НАСТРОЙКА CORS и MIDDLEWARE ---
 const allowedOrigins = [
     'https://vuz-portal-frontend.onrender.com', 
     'http://localhost:3000', 
@@ -146,7 +145,7 @@ app.use(cors(corsOptions));
 app.use(express.json()); 
 
 
-// --- MIDDLEWARE ПРОВЕРКИ JWT и РОЛИ (Добавлена isTeacherOrCurator) ---
+// --- MIDDLEWARE ПРОВЕРКИ JWT и РОЛИ ---
 function authenticateToken(req, res, next) {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1]; 
@@ -183,7 +182,7 @@ function isTeacherOrCurator(req, res, next) {
     }
 }
 
-// --- 1-6. Маршруты Аутентификации, Управления Ролями и Создания Документа (Без изменений) ---
+// --- Маршруты Аутентификации и Управления Ролями ---
 
 app.post('/api/register', async (req, res) => {
     const { name, email, password } = req.body;
@@ -287,7 +286,7 @@ app.get('/api/users', authenticateToken, isCurator, async (req, res) => {
 });
 
 
-// --- 6. МАРШРУТ: СОЗДАНИЕ НОВОГО ДОКУМЕНТА (Без изменений) ---
+// --- 6. МАРШРУТ: СОЗДАНИЕ НОВОГО ДОКУМЕНТА ---
 app.post('/api/documents/create', authenticateToken, isTeacher, async (req, res) => {
     const { templateName, studentEmail, title, teacherData } = req.body; 
 
@@ -302,6 +301,7 @@ app.post('/api/documents/create', authenticateToken, isTeacher, async (req, res)
     if (!studentEmail) {
         return res.status(400).json({ success: false, message: "Отсутствует Email студента." });
     }
+    // Конвертация ID в число при создании
     let finalTeacherId = typeof teacherId === 'string' ? parseInt(teacherId, 10) : teacherId;
     if (isNaN(finalTeacherId)) {
          return res.status(400).json({ success: false, message: "Ошибка аутентификации: ID преподавателя недействителен." });
@@ -330,7 +330,7 @@ app.post('/api/documents/create', authenticateToken, isTeacher, async (req, res)
 });
 
 
-// --- 7. МАРШРУТ: ПОЛУЧЕНИЕ ДОКУМЕНТОВ ДЛЯ ЗАПОЛНЕНИЯ (СТУДЕНТ) (ОБНОВЛЕН) ---
+// --- 7. МАРШРУТ: ПОЛУЧЕНИЕ ДОКУМЕНТОВ ДЛЯ ЗАПОЛНЕНИЯ (СТУДЕНТ) ---
 app.get('/api/documents/student', authenticateToken, async (req, res) => {
     if (req.user.role !== 'Студент') {
         return res.status(403).json({ success: false, message: "Доступ разрешен только для Студентов." });
@@ -340,7 +340,6 @@ app.get('/api/documents/student', authenticateToken, async (req, res) => {
 
     try {
         const documentsResult = await pool.query(
-            // Студент видит документы, которые нужно заполнить ИЛИ те, которые отправили на доработку.
             'SELECT id, title, template, status, submitted_data, teacher_comment FROM documents WHERE student_email = $1 AND (status = $2 OR status = $3) ORDER BY created_at DESC',
             [studentEmail, 'Ожидает заполнения', 'Отправлено на доработку']
         );
@@ -357,7 +356,7 @@ app.get('/api/documents/student', authenticateToken, async (req, res) => {
 });
 
 
-// --- 8. МАРШРУТ: ОТПРАВКА ЗАПОЛНЕННОГО ДОКУМЕНТА (СТУДЕНТ) (ОБНОВЛЕН) ---
+// --- 8. МАРШРУТ: ОТПРАВКА ЗАПОЛНЕННОГО ДОКУМЕНТА (СТУДЕНТ) ---
 app.put('/api/documents/submit/:id', authenticateToken, async (req, res) => {
     if (req.user.role !== 'Студент') {
         return res.status(403).json({ success: false, message: "Доступ разрешен только для Студентов." });
@@ -387,7 +386,6 @@ app.put('/api/documents/submit/:id', authenticateToken, async (req, res) => {
         const finalSubmittedData = { ...existingData, ...studentData };
         
         const result = await pool.query(
-            // Новый статус: Ожидает проверки преподавателем
             'UPDATE documents SET status = $1, submitted_data = $2, teacher_comment = NULL WHERE id = $3 AND student_email = $4 RETURNING id',
             ['Ожидает проверки преподавателем', finalSubmittedData, documentId, studentEmail]
         );
@@ -404,7 +402,7 @@ app.put('/api/documents/submit/:id', authenticateToken, async (req, res) => {
 });
 
 
-// --- 9. МАРШРУТ: ПОЛУЧЕНИЕ ВСЕХ ДОКУМЕНТОВ, СОЗДАННЫХ ПРЕПОДАВАТЕЛЕМ (ОБНОВЛЕН) ---
+// --- 9. МАРШРУТ: ПОЛУЧЕНИЕ ВСЕХ ДОКУМЕНТОВ, СОЗДАННЫХ ПРЕПОДАВАТЕЛЕМ ---
 app.get('/api/documents/teacher', authenticateToken, isTeacher, async (req, res) => {
     
     const teacherId = req.user.id; 
@@ -433,7 +431,7 @@ app.get('/api/documents/teacher', authenticateToken, isTeacher, async (req, res)
 app.put('/api/documents/teacher/action/:id', authenticateToken, isTeacher, async (req, res) => {
     const documentId = req.params.id;
     const teacherId = req.user.id;
-    const { action, teacherData, comment } = req.body; // action: 'approve' или 'reject'
+    const { action, teacherData, comment } = req.body; 
     
     if (!['approve', 'reject'].includes(action)) {
         return res.status(400).json({ success: false, message: "Неверное действие. Допустимо 'approve' или 'reject'." });
@@ -462,14 +460,12 @@ app.put('/api/documents/teacher/action/:id', authenticateToken, isTeacher, async
                  return res.status(400).json({ success: false, message: "Необходим комментарий для отправки на доработку." });
             }
             newStatus = 'Отправлено на доработку';
-            // Обновляем статус и добавляем комментарий
             updateQuery = 'UPDATE documents SET status = $1, teacher_comment = $2 WHERE id = $3 RETURNING id';
             updateParams = [newStatus, comment.trim(), documentId];
             successMessage = `Документ ${documentId} отправлен студенту на доработку.`;
 
         } else if (action === 'approve') {
             newStatus = 'Готов к утверждению куратором';
-            // Обновляем статус, сохраняем финальные данные и очищаем комментарий
             updateQuery = 'UPDATE documents SET status = $1, submitted_data = $2, teacher_comment = NULL WHERE id = $3 RETURNING id';
             updateParams = [newStatus, finalData, documentId];
             successMessage = `Документ ${documentId} отправлен Куратору на утверждение.`;
@@ -486,16 +482,23 @@ app.put('/api/documents/teacher/action/:id', authenticateToken, isTeacher, async
 });
 
 
-// --- 10. МАРШРУТ: СКАЧИВАНИЕ ФИНАЛЬНОГО ДОКУМЕНТА (ИСПРАВЛЕНО!) ---
+// --- 10. МАРШРУТ: СКАЧИВАНИЕ ФИНАЛЬНОГО ДОКУМЕНТА (КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: ПРЕОБРАЗОВАНИЕ ID) ---
 app.get('/api/documents/download/:id', authenticateToken, isTeacherOrCurator, async (req, res) => {
-    const documentId = req.params.id;
+    
+    // *** ИСПРАВЛЕНИЕ: Преобразование documentId в целое число (INTEGER) ***
+    const documentId = parseInt(req.params.id, 10);
+    if (isNaN(documentId)) {
+        return res.status(400).json({ success: false, message: "Неверный ID документа." });
+    }
+    
     const isCurator = req.user.role === 'Куратор';
-    const teacherId = req.user.id;
+    // *** ИСПРАВЛЕНИЕ: Преобразование teacherId в целое число (INTEGER) ***
+    const teacherId = isCurator ? null : parseInt(req.user.id, 10); 
 
     try {
         let query = `SELECT d.title, d.submitted_data, d.template
                      FROM documents d
-                     WHERE d.id = $1 AND d.status IN ($2, $3)`; // Используем IN для финальных статусов
+                     WHERE d.id = $1 AND d.status IN ($2, $3)`; 
         let params = [documentId, 'Готов к утверждению куратором', 'Утверждено куратором'];
 
         // Если это не Куратор, добавляем проверку на принадлежность документа
@@ -508,7 +511,6 @@ app.get('/api/documents/download/:id', authenticateToken, isTeacherOrCurator, as
         const doc = docResult.rows[0];
 
         if (!doc) {
-            // Если документ не найден, он либо недоступен, либо не в финальном статусе
             return res.status(404).json({ success: false, message: `Документ с ID ${documentId} не найден, не утвержден или недоступен для вас.` });
         }
 
@@ -538,12 +540,12 @@ app.get('/api/documents/download/:id', authenticateToken, isTeacherOrCurator, as
 
     } catch (error) {
         console.error("КРИТИЧЕСКАЯ ОШИБКА при скачивании документа:", error);
-        // Возвращаем 500 только при критической ошибке, а не при 404
         res.status(500).json({ success: false, message: "Критическая ошибка сервера при скачивании документа." });
     }
 });
 
-// --- 11. МАРШРУТ: ПОЛУЧЕНИЕ ВСЕХ ДОКУМЕНТОВ (КУРАТОР) (Без изменений) ---
+
+// --- 11. МАРШРУТ: ПОЛУЧЕНИЕ ВСЕХ ДОКУМЕНТОВ (КУРАТОР) ---
 app.get('/api/documents/all', authenticateToken, isCurator, async (req, res) => {
     try {
         const documentsResult = await pool.query(
