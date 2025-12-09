@@ -441,6 +441,7 @@ app.put('/api/documents/finalize/:id', authenticateToken, isTeacher, async (req,
     const { finalTeacherData } = req.body; 
     const teacherId = req.user.id;
 
+    // ВАЛИДАЦИЯ, которая вызывала 400 при пустой форме:
     if (!finalTeacherData || Object.keys(finalTeacherData).length === 0) {
          return res.status(400).json({ success: false, message: "Отсутствуют финальные данные для заполнения." });
     }
@@ -457,6 +458,7 @@ app.put('/api/documents/finalize/:id', authenticateToken, isTeacher, async (req,
         
         const existingData = currentDoc.rows[0].submitted_data || {};
         
+        // Объединяем старые и новые (техническое поле, если не было других) данные
         const finalSubmittedData = { ...existingData, ...finalTeacherData };
         
         // 3. Обновляем документ и меняем статус на "Завершено"
