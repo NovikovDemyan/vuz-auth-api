@@ -1,4 +1,4 @@
-// auth_api/server.js - ФИНАЛЬНАЯ ВЕРСИЯ С ФУНКЦИЕЙ СКАЧИВАНИЯ DOCX
+// auth_api/server.js - ФИНАЛЬНАЯ ВЕРСИЯ С РЕЦЕНЗИЕЙ ПРЕПОДАВАТЕЛЯ И УТВЕРЖДЕНИЕМ КУРАТОРА
 
 const express = require('express');
 const bcrypt = require('bcrypt');
@@ -6,9 +6,6 @@ const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const { Pool } = require('pg'); 
 require('dotenv').config();
-
-// НОВЫЙ ИМПОРТ ДЛЯ РАБОТЫ С DOCX
-const { Document, Packer, Paragraph, TextRun, AlignmentType, HeadingLevel } = require('docx'); 
 
 const app = express();
 const port = process.env.PORT || 3000; 
@@ -23,7 +20,7 @@ if (!SECRET_KEY || !DATABASE_URL) {
     process.exit(1); 
 }
 
-// --- ПОДКЛЮЧЕНИЕ К POSTGRESQL ---
+// --- ПОДКЛЮЧЕНИЕ К POSTGRESQL ---\
 const pool = new Pool({
     connectionString: DATABASE_URL,
     ssl: {
@@ -31,7 +28,7 @@ const pool = new Pool({
     }
 });
 
-// --- ШАБЛОНЫ ДОКУМЕНТОВ ---
+// --- ШАБЛОНЫ ДОКУМЕНТОВ ---\
 const documentTemplates = {
     'Заявление на Отпуск': {
         parts: [
@@ -42,584 +39,489 @@ const documentTemplates = {
             { type: "text", content: " по " },
             { type: "input", name: "Дата_Окончания", role: "Студент" },
             { type: "text", content: ". Приказ о согласовании №" },
-            { type: "input", name: "Номер_Приказа_Ректора", role: "Преподаватель" }, 
-            { type: "text", content: " от " },
-            { type: "input", name: "Дата_Приказа_Ректора", role: "Преподаватель" }, 
+            { type: "input", name: "Номер_Приказа_Ректора", role: "Преподаватель" },
             { type: "text", content: "." }
-        ]
+        ],
+        requiredRoles: ['Преподаватель']
     },
     'Уведомление о Задолженности': {
         parts: [
             { type: "text", content: "Уважаемый Студент " },
             { type: "input", name: "Фамилия_Имя", role: "Студент" },
             { type: "text", content: "! У вас имеется задолженность по предмету " },
-            { type: "input", name: "Название_Предмета", role: "Преподаватель" }, 
+            { type: "input", name: "Название_Предмета", role: "Преподаватель" },
             { type: "text", content: ". Текущий долг: " },
             { type: "input", name: "Тема_Долга", role: "Студент" },
             { type: "text", content: ". Крайний срок сдачи до " },
-            { type: "input", name: "Крайний_Срок", role: "Преподаватель" }, 
-            { type: "text", content: ". Статус проверки Куратором: " },
-            { type: "input", name: "Статус_Куратора", role: "Преподаватель" },
+            { type: "input", name: "Крайний_Срок", role: "Преподаватель" },
             { type: "text", content: "." }
-        ]
+        ],
+        requiredRoles: ['Преподаватель']
     },
     'Запрос на Смену Руководителя': {
         parts: [
             { type: "text", content: "Прошу разрешить мне, студенту " },
             { type: "input", name: "Фамилия_Имя", role: "Студент" },
             { type: "text", content: ", сменить научного руководителя дипломного проекта с " },
-            { type: "input", name: "Текущий_Руководитель", role: "Преподаватель" }, 
+            { type: "input", name: "Текущий_Руководитель", role: "Преподаватель" },
             { type: "text", content: " на " },
-            { type: "input", name: "Новый_Руководитель", role: "Преподаватель" }, 
+            { type: "input", name: "Новый_Руководитель", role: "Преподаватель" },
             { type: "text", content: ". Причина, указанная студентом: " },
             { type: "input", name: "Причина_Смены", role: "Студент" },
-            { type: "text", content: ". Дата утверждения: " },
-            { type: "input", name: "Дата_Утверждения_Декана", role: "Преподаватель" },
             { type: "text", content: "." }
-        ]
+        ],
+        requiredRoles: ['Преподаватель']
     }
 };
 
-// Функция для создания таблиц (без изменений)
-async function createUsersTable() {
+// --- ИНИЦИАЛИЗАЦИЯ ТАБЛИЦЫ ДОКУМЕНТОВ ---
+async function initializeDb() {
     try {
-        const queryUsers = `
+        await pool.query(`
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
-                name VARCHAR(100) NOT NULL,
-                email VARCHAR(100) UNIQUE NOT NULL,
-                hashedPassword VARCHAR(100) NOT NULL,
-                role VARCHAR(50) DEFAULT 'Студент' 
+                name VARCHAR(255) NOT NULL,
+                email VARCHAR(255) UNIQUE NOT NULL,
+                hashedpassword VARCHAR(255) NOT NULL,
+                role VARCHAR(50) DEFAULT 'Студент'
             );
-        `;
-        await pool.query(queryUsers);
-        console.log('Таблица users успешно создана или уже существует.');
-
-        // ТАБЛИЦА DOCUMENTS 
-        const queryDocuments = `
+        `);
+        await pool.query(`
             CREATE TABLE IF NOT EXISTS documents (
                 id SERIAL PRIMARY KEY,
                 title VARCHAR(255) NOT NULL,
-                template JSONB NOT NULL,
-                student_email VARCHAR(100) NOT NULL,
-                teacher_id INTEGER NOT NULL REFERENCES users(id),
-                status VARCHAR(50) DEFAULT 'Ожидает заполнения', 
-                submitted_data JSONB, 
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                template_name VARCHAR(255) NOT NULL,
+                teacher_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                student_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                status VARCHAR(50) DEFAULT 'Ожидает заполнения',
+                submitted_data JSONB DEFAULT '{}'
             );
-        `;
-        await pool.query(queryDocuments);
-        console.log('Таблица documents успешно создана или уже существует.');
-
-
-        // Добавление тестовых пользователей
-        const usersToInsert = [
-            { name: 'Куратор Иван', email: 'curator@vuz.ru', role: 'Куратор' },
-            { name: 'Преподаватель Петр', email: 'teacher@vuz.ru', role: 'Преподаватель' },
-            { name: 'Студент Антон', email: 'student@vuz.ru', role: 'Студент' }
+        `);
+        // Создание тестовых пользователей, если их нет
+        const testUsers = [
+            { name: 'Куратор ВУЗа', email: 'curator@vuz.ru', role: 'Куратор', password: '123456' },
+            { name: 'Преподаватель 1', email: 'teacher@vuz.ru', role: 'Преподаватель', password: '123456' },
+            { name: 'Студент 1', email: 'student@vuz.ru', role: 'Студент', password: '123456' }
         ];
 
-        for (const user of usersToInsert) {
-            const check = await pool.query('SELECT 1 FROM users WHERE email = $1', [user.email]);
-            if (check.rowCount === 0) {
-                const hashedPassword = await bcrypt.hash('123456', SALT_ROUNDS); 
+        for (const user of testUsers) {
+            const result = await pool.query('SELECT * FROM users WHERE email = $1', [user.email]);
+            if (result.rows.length === 0) {
+                const hashedPassword = await bcrypt.hash(user.password, SALT_ROUNDS);
                 await pool.query(
-                    'INSERT INTO users (name, email, hashedPassword, role) VALUES ($1, $2, $3, $4)',
+                    'INSERT INTO users (name, email, hashedpassword, role) VALUES ($1, $2, $3, $4)',
                     [user.name, user.email, hashedPassword, user.role]
                 );
-                console.log(`Тестовый пользователь (${user.email}, ${user.role}) добавлен. Пароль: 123456`);
+                console.log(`Создан тестовый пользователь: ${user.email}`);
             }
         }
+        
+        console.log("База данных успешно инициализирована.");
     } catch (err) {
-        console.error('Ошибка создания таблиц:', err);
+        console.error("Ошибка инициализации базы данных:", err);
     }
 }
-createUsersTable();
 
+// --- MIDDLEWARE ---
+app.use(cors());
+app.use(express.json());
 
-// --- НАСТРОЙКА CORS и MIDDLEWARE ---
-const allowedOrigins = [
-    // !!! ДОЛЖЕН БЫТЬ ТОЧНО ЭТОТ АДРЕС ИЗ КОНСОЛИ !!!
-    'https://vuz-portal-frontend.onrender.com', 
-    
-    'http://localhost:3000', 
-    'http://localhost:5500', 
-];
+// Middleware для проверки JWT токена и извлечения данных пользователя
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
 
-const corsOptions = {
-    origin: (origin, callback) => {
-        if (!origin || allowedOrigins.includes(origin)) { 
-            callback(null, true);
-        } else {
-            callback(new Error('CORS Policy Blocked'));
-        }
-    }
+    if (!token) return res.status(401).json({ success: false, message: "Необходима авторизация." });
+
+    jwt.verify(token, SECRET_KEY, (err, user) => {
+        if (err) return res.status(403).json({ success: false, message: "Недействительный или просроченный токен." });
+        req.user = user;
+        next();
+    });
 };
 
-app.use(cors(corsOptions)); 
-app.use(express.json()); 
-
-
-// --- MIDDLEWARE ПРОВЕРКИ JWT и РОЛИ ---
-function authenticateToken(req, res, next) {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1]; 
-    if (token == null) return res.sendStatus(401); 
-
-    jwt.verify(token, SECRET_KEY, (err, userPayload) => {
-        if (err) return res.sendStatus(403); 
-        req.user = userPayload; 
-        next(); 
-    });
-}
-
-function isCurator(req, res, next) {
-    if (req.user && req.user.role === 'Куратор') {
-        next(); 
-    } else {
-        res.status(403).json({ success: false, message: "Доступ запрещен. Требуется роль Куратор." });
+// Middleware для проверки роли
+const checkRole = (roles) => (req, res, next) => {
+    if (!roles.includes(req.user.role)) {
+        return res.status(403).json({ success: false, message: "Недостаточно прав для выполнения операции." });
     }
-}
+    next();
+};
 
-function isTeacher(req, res, next) {
-    if (req.user && req.user.role === 'Преподаватель') {
-        next(); 
-    } else {
-        res.status(403).json({ success: false, message: "Доступ запрещен. Требуется роль Преподаватель." });
-    }
-}
-
-
-// --- МАРШРУТЫ АУТЕНТИФИКАЦИИ И УПРАВЛЕНИЯ РОЛЯМИ ---
-
+// --- АУТЕНТИФИКАЦИЯ И РЕГИСТРАЦИЯ ---
 app.post('/api/register', async (req, res) => {
-    const { name, email, password } = req.body;
-    
     try {
-        const existingUser = await pool.query('SELECT 1 FROM users WHERE email = $1', [email]);
-        if (existingUser.rowCount > 0) {
-            return res.status(409).json({ success: false, message: 'Этот Email уже зарегистрирован.' });
-        }
-
+        const { name, email, password } = req.body;
         const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
         
-        await pool.query(
-            'INSERT INTO users (name, email, hashedPassword, role) VALUES ($1, $2, $3, $4)',
-            [name, email, hashedPassword, 'Студент'] 
+        const result = await pool.query(
+            'INSERT INTO users (name, email, hashedpassword) VALUES ($1, $2, $3) RETURNING id, name, role',
+            [name, email, hashedPassword]
         );
-        
-        res.status(201).json({ success: true, message: 'Регистрация успешна. Вы Студент.' });
-    } catch (error) {
-        console.error("Ошибка регистрации:", error);
-        res.status(500).json({ success: false, message: 'Ошибка сервера при регистрации.' });
+
+        res.json({ success: true, message: "Пользователь успешно зарегистрирован как Студент.", user: result.rows[0] });
+    } catch (err) {
+        if (err.code === '23505') { // unique_violation
+            return res.status(400).json({ success: false, message: "Пользователь с таким Email уже существует." });
+        }
+        console.error("Ошибка регистрации:", err);
+        res.status(500).json({ success: false, message: "Ошибка сервера при регистрации." });
     }
 });
 
 app.post('/api/login', async (req, res) => {
-    const { email, password } = req.body;
-    
     try {
-        const result = await pool.query('SELECT id, name, role, email, hashedpassword FROM users WHERE email = $1', [email]);
+        const { email, password } = req.body;
+        const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
         const user = result.rows[0];
 
-        if (!user) return res.status(401).json({ success: false, message: 'Неверные данные.' });
+        if (!user) {
+            return res.status(400).json({ success: false, message: "Неверный Email или пароль." });
+        }
 
-        const isPasswordValid = await bcrypt.compare(password, user.hashedpassword); 
-        
-        if (!isPasswordValid) return res.status(401).json({ success: false, message: 'Неверные данные.' });
+        const match = await bcrypt.compare(password, user.hashedpassword);
+        if (!match) {
+            return res.status(400).json({ success: false, message: "Неверный Email или пароль." });
+        }
 
         const token = jwt.sign(
-            { id: user.id, name: user.name, role: user.role, email: user.email }, 
+            { id: user.id, email: user.email, role: user.role, name: user.name }, 
             SECRET_KEY, 
-            { expiresIn: '1d' } 
+            { expiresIn: '24h' }
         );
 
-        return res.status(200).json({ success: true, token: token, role: user.role });
-    } catch (error) {
-        console.error("Ошибка входа:", error);
-        res.status(500).json({ success: false, message: 'Ошибка сервера при входе.' });
+        res.json({ success: true, message: "Вход выполнен успешно.", token, role: user.role });
+
+    } catch (err) {
+        console.error("Ошибка входа:", err);
+        res.status(500).json({ success: false, message: "Ошибка сервера при входе." });
     }
 });
 
 app.get('/api/greeting', authenticateToken, (req, res) => {
-    const userName = req.user.name;
-    const userRole = req.user.role; 
-
-    res.status(200).json({ 
-        success: true,
-        message: `Привет, ${userName}!`,
-        userName: userName,
-        userRole: userRole
+    res.json({ 
+        success: true, 
+        message: `Привет, ${req.user.name}!`, 
+        userName: req.user.name,
+        userRole: req.user.role
     });
 });
 
-app.put('/api/users/role', authenticateToken, isCurator, async (req, res) => {
-    const { email, newRole } = req.body;
-
-    if (!['Студент', 'Преподаватель', 'Куратор'].includes(newRole)) {
-        return res.status(400).json({ success: false, message: "Неверная целевая роль." });
-    }
-
+// --- УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ (КУРАТОР) ---
+app.get('/api/users', authenticateToken, checkRole(['Куратор']), async (req, res) => {
     try {
+        const result = await pool.query('SELECT id, name, email, role, hashedpassword FROM users ORDER BY id');
+        res.json({ success: true, users: result.rows });
+    } catch (err) {
+        console.error("Ошибка при получении списка пользователей:", err);
+        res.status(500).json({ success: false, message: "Ошибка сервера при получении данных пользователей." });
+    }
+});
+
+app.put('/api/users/role', authenticateToken, checkRole(['Куратор']), async (req, res) => {
+    try {
+        const { email, newRole } = req.body;
+        if (!['Студент', 'Преподаватель', 'Куратор'].includes(newRole)) {
+            return res.status(400).json({ success: false, message: "Недопустимая роль." });
+        }
+
         const result = await pool.query(
-            'UPDATE users SET role = $1 WHERE email = $2 RETURNING id',
+            'UPDATE users SET role = $1 WHERE email = $2 RETURNING id, name, role',
             [newRole, email]
         );
 
-        if (result.rowCount === 0) {
-            return res.status(404).json({ success: false, message: `Пользователь с email ${email} не найден.` });
+        if (result.rows.length === 0) {
+            return res.status(404).json({ success: false, message: "Пользователь с таким Email не найден." });
         }
 
-        res.status(200).json({ 
-            success: true, 
-            message: `Роль пользователя ${email} успешно обновлена на ${newRole}.` 
-        });
-    } catch (error) {
-        console.error("Ошибка при обновлении роли:", error);
+        res.json({ success: true, message: `Роль пользователя ${email} успешно обновлена на ${newRole}.` });
+
+    } catch (err) {
+        console.error("Ошибка обновления роли:", err);
         res.status(500).json({ success: false, message: "Ошибка сервера при обновлении роли." });
     }
 });
 
-app.get('/api/users', authenticateToken, isCurator, async (req, res) => {
+// --- API ДОКУМЕНТОВ: СОЗДАНИЕ (ПРЕПОДАВАТЕЛЬ) ---
+app.post('/api/documents/create', authenticateToken, checkRole(['Преподаватель']), async (req, res) => {
     try {
-        const result = await pool.query('SELECT id, name, email, role, hashedpassword FROM users ORDER BY id ASC');
+        const { templateName, studentEmail, title, teacherData } = req.body;
+        const teacherId = req.user.id;
         
-        res.status(200).json({ 
-            success: true, 
-            users: result.rows
-        });
-    } catch (error) {
-        console.error("Ошибка получения списка пользователей:", error);
-        res.status(500).json({ success: false, message: "Ошибка сервера при получении данных." });
-    }
-});
+        const template = documentTemplates[templateName];
+        if (!template) {
+            return res.status(400).json({ success: false, message: "Неизвестный шаблон документа." });
+        }
 
-
-// --- 6. МАРШРУТ: СОЗДАНИЕ НОВОГО ДОКУМЕНТА (ПРЕПОДАВАТЕЛЬ) ---
-app.post('/api/documents/create', authenticateToken, isTeacher, async (req, res) => {
-    const { templateName, studentEmail, title, teacherData } = req.body; 
-
-    const template = documentTemplates[templateName];
-    if (!template) {
-        return res.status(400).json({ success: false, message: `Шаблон с именем "${templateName}" не найден в коде сервера.` });
-    }
-
-    const finalTitle = title || templateName;
-    const teacherId = req.user.id; 
-    
-    if (!studentEmail) {
-        return res.status(400).json({ success: false, message: "Отсутствует Email студента." });
-    }
-    let finalTeacherId = typeof teacherId === 'string' ? parseInt(teacherId, 10) : teacherId;
-    if (isNaN(finalTeacherId)) {
-         return res.status(400).json({ success: false, message: "Ошибка аутентификации: ID преподавателя недействителен." });
-    }
-    
-    const studentCheck = await pool.query('SELECT 1 FROM users WHERE email = $1 AND role = $2', [studentEmail, 'Студент']);
-    if (studentCheck.rowCount === 0) {
-        return res.status(404).json({ success: false, message: `Студент с email ${studentEmail} не найден.` });
-    }
-
-    try {
+        // 1. Найти ID студента
+        const studentResult = await pool.query('SELECT id FROM users WHERE email = $1 AND role = $2', [studentEmail, 'Студент']);
+        if (studentResult.rows.length === 0) {
+            return res.status(404).json({ success: false, message: `Студент с email ${studentEmail} не найден.` });
+        }
+        const studentId = studentResult.rows[0].id;
+        
+        // 2. Вставить документ
+        const documentTitle = title || templateName;
         const result = await pool.query(
-            'INSERT INTO documents (title, student_email, template, teacher_id, submitted_data) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-            [finalTitle, studentEmail, template, finalTeacherId, teacherData || {}] 
+            'INSERT INTO documents (title, template_name, teacher_id, student_id, submitted_data) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+            [documentTitle, templateName, teacherId, studentId, teacherData]
         );
 
-        res.status(201).json({ 
+        res.json({ 
             success: true, 
-            message: `Документ "${finalTitle}" успешно создан и отправлен студенту.`,
+            message: `Документ "${documentTitle}" успешно создан и отправлен студенту ${studentEmail}.`,
             documentId: result.rows[0].id
         });
-    } catch (error) {
-        console.error("Ошибка при создании документа (SQL/Server):", error.message); 
+
+    } catch (err) {
+        console.error("Ошибка создания документа:", err);
         res.status(500).json({ success: false, message: "Ошибка сервера при создании документа." });
     }
 });
 
-
-// --- 7. МАРШРУТ: ПОЛУЧЕНИЕ ДОКУМЕНТОВ ДЛЯ ЗАПОЛНЕНИЯ (СТУДЕНТ) ---
-app.get('/api/documents/student', authenticateToken, async (req, res) => {
-    if (req.user.role !== 'Студент') {
-        return res.status(403).json({ success: false, message: "Доступ разрешен только для Студентов." });
-    }
-    
-    const studentEmail = req.user.email;
-
+// --- API ДОКУМЕНТОВ: ПРОСМОТР ДЛЯ СТУДЕНТА ---
+app.get('/api/documents/student', authenticateToken, checkRole(['Студент']), async (req, res) => {
     try {
-        const documentsResult = await pool.query(
-            'SELECT id, title, template, status, submitted_data FROM documents WHERE student_email = $1 AND status IN ($2, $3, $4) ORDER BY created_at DESC',
-            [studentEmail, 'Ожидает заполнения', 'Заполнено', 'Завершено'] // Студент видит все свои документы
-        );
-        
-        res.status(200).json({ 
-            success: true, 
-            documents: documentsResult.rows
-        });
+        const studentId = req.user.id;
 
-    } catch (error) {
-        console.error("Ошибка получения документов для студента:", error);
-        res.status(500).json({ success: false, message: "Ошибка сервера при получении документов." });
+        const result = await pool.query(
+            'SELECT id, title, template_name, status, submitted_data FROM documents WHERE student_id = $1 ORDER BY id DESC', 
+            [studentId]
+        );
+
+        const documents = result.rows.map(doc => ({
+            ...doc,
+            template: documentTemplates[doc.template_name]
+        }));
+
+        res.json({ success: true, documents });
+
+    } catch (err) {
+        console.error("Ошибка загрузки документов для студента:", err);
+        res.status(500).json({ success: false, message: "Ошибка сервера при загрузке документов." });
     }
 });
 
-
-// --- 8. МАРШРУТ: ОТПРАВКА ЗАПОЛНЕННОГО ДОКУМЕНТА (СТУДЕНТ) ---
-app.put('/api/documents/submit/:id', authenticateToken, async (req, res) => {
-    if (req.user.role !== 'Студент') {
-        return res.status(403).json({ success: false, message: "Доступ разрешен только для Студентов." });
-    }
-    
-    const documentId = req.params.id;
-    const { studentData } = req.body; 
-    
-    if (!studentData) {
-         return res.status(400).json({ success: false, message: "Отсутствуют заполненные данные." });
-    }
-    
-    const studentEmail = req.user.email;
-
+// --- API ДОКУМЕНТОВ: ОТПРАВКА СТУДЕНТОМ ---
+app.put('/api/documents/submit/:docId', authenticateToken, checkRole(['Студент']), async (req, res) => {
     try {
-        const currentDoc = await pool.query(
-            'SELECT submitted_data FROM documents WHERE id = $1 AND student_email = $2 AND status = $3',
-            [documentId, studentEmail, 'Ожидает заполнения']
-        );
+        const { docId } = req.params;
+        const studentId = req.user.id;
+        const { studentData } = req.body;
 
-        if (currentDoc.rowCount === 0) {
-            return res.status(404).json({ success: false, message: `Документ с ID ${documentId} не найден, не предназначен для вас или уже заполнен.` });
+        // 1. Проверить, что документ существует и принадлежит студенту
+        const docResult = await pool.query(
+            'SELECT * FROM documents WHERE id = $1 AND student_id = $2', 
+            [docId, studentId]
+        );
+        const doc = docResult.rows[0];
+
+        if (!doc) {
+            return res.status(404).json({ success: false, message: "Документ не найден или не принадлежит вам." });
         }
         
-        const existingData = currentDoc.rows[0].submitted_data || {};
+        if (doc.status !== 'Ожидает заполнения') {
+             return res.status(400).json({ success: false, message: `Документ уже не находится в статусе "Ожидает заполнения". Текущий статус: ${doc.status}` });
+        }
+
+        // 2. Объединить новые данные с существующими (данные преподавателя)
+        const newSubmittedData = { ...doc.submitted_data, ...studentData };
         
-        // Объединяем старые и новые данные
-        const finalSubmittedData = { ...existingData, ...studentData };
-        
-        // Обновляем статус на "Заполнено" (Ожидает финальной проверки Преподавателя)
-        const result = await pool.query(
-            'UPDATE documents SET status = $1, submitted_data = $2 WHERE id = $3 AND student_email = $4 RETURNING id',
-            ['Заполнено', finalSubmittedData, documentId, studentEmail]
+        // 3. Обновить статус и данные
+        await pool.query(
+            'UPDATE documents SET submitted_data = $1, status = $2 WHERE id = $3',
+            [newSubmittedData, 'Заполнено', docId]
         );
 
+        res.json({ success: true, message: `Документ "${doc.title}" успешно заполнен и отправлен на рецензию преподавателю.` });
 
-        res.status(200).json({ 
-            success: true, 
-            message: `Документ "${documentId}" успешно заполнен и отправлен Преподавателю на проверку.` 
-        });
-    } catch (error) {
-        console.error("Ошибка при отправке заполненного документа:", error);
+    } catch (err) {
+        console.error("Ошибка отправки документа студентом:", err);
         res.status(500).json({ success: false, message: "Ошибка сервера при отправке документа." });
     }
 });
 
-
-// --- 9. МАРШРУТ: ПОЛУЧЕНИЕ ВСЕХ ДОКУМЕНТОВ, СОЗДАННЫХ ПРЕПОДАВАТЕЛЕМ ---
-app.get('/api/documents/teacher', authenticateToken, isTeacher, async (req, res) => {
-    
-    const teacherId = req.user.id; 
-
+// --- API ДОКУМЕНТОВ: ПРОСМОТР ДЛЯ ПРЕПОДАВАТЕЛЯ ---
+app.get('/api/documents/teacher', authenticateToken, checkRole(['Преподаватель']), async (req, res) => {
     try {
-        const documentsResult = await pool.query(
-            `SELECT id, title, student_email, template, status, submitted_data, created_at 
-             FROM documents 
-             WHERE teacher_id = $1 
-             ORDER BY created_at DESC`,
+        const teacherId = req.user.id;
+
+        const result = await pool.query(
+            'SELECT d.id, d.title, d.template_name, d.status, d.submitted_data, u.email as student_email FROM documents d JOIN users u ON d.student_id = u.id WHERE d.teacher_id = $1 ORDER BY d.id DESC', 
             [teacherId]
         );
-        
-        res.status(200).json({ 
-            success: true, 
-            documents: documentsResult.rows 
-        });
 
-    } catch (error) {
-        console.error("Ошибка получения документов для преподавателя:", error);
-        res.status(500).json({ success: false, message: "Ошибка сервера при получении документов." });
+        const documents = result.rows.map(doc => ({
+            ...doc,
+            template: documentTemplates[doc.template_name]
+        }));
+
+        res.json({ success: true, documents });
+
+    } catch (err) {
+        console.error("Ошибка загрузки документов для преподавателя:", err);
+        res.status(500).json({ success: false, message: "Ошибка сервера при загрузке документов." });
     }
 });
 
-
-// --- МАРШРУТ: ФИНАЛИЗАЦИЯ/УТВЕРЖДЕНИЕ ДОКУМЕНТА (ПРЕПОДАВАТЕЛЬ) ---
-app.put('/api/documents/finalize/:id', authenticateToken, isTeacher, async (req, res) => {
-    const documentId = req.params.id;
-    const { finalTeacherData } = req.body; 
-    const teacherId = req.user.id;
-
-    if (!finalTeacherData || Object.keys(finalTeacherData).length === 0) {
-         return res.status(400).json({ success: false, message: "Отсутствуют финальные данные для заполнения." });
-    }
-
+// --- НОВЫЙ API ДОКУМЕНТОВ: РЕЦЕНЗИЯ ПРЕПОДАВАТЕЛЯ (ИЗМЕНЕНИЕ ДАННЫХ И СМЕНА СТАТУСА) ---
+app.put('/api/documents/review/:docId', authenticateToken, checkRole(['Преподаватель']), async (req, res) => {
     try {
-        const currentDoc = await pool.query(
-            'SELECT submitted_data, status FROM documents WHERE id = $1 AND teacher_id = $2',
-            [documentId, teacherId]
-        );
+        const { docId } = req.params;
+        const teacherId = req.user.id;
+        const { reviewData } = req.body; 
 
-        if (currentDoc.rowCount === 0) {
-            return res.status(404).json({ success: false, message: `Документ с ID ${documentId} не найден или не принадлежит вам.` });
+        // 1. Проверить, что документ существует и принадлежит преподавателю
+        const docResult = await pool.query(
+            'SELECT * FROM documents WHERE id = $1 AND teacher_id = $2', 
+            [docId, teacherId]
+        );
+        const doc = docResult.rows[0];
+
+        if (!doc) {
+            return res.status(404).json({ success: false, message: "Документ не найден или не принадлежит вам." });
         }
         
-        const existingData = currentDoc.rows[0].submitted_data || {};
+        if (doc.status !== 'Заполнено') {
+             return res.status(400).json({ success: false, message: `Документ должен быть в статусе "Заполнено" для рецензии. Текущий статус: ${doc.status}` });
+        }
+
+        // 2. Объединить рецензионные данные с существующими (перезаписывая поля Преподавателя)
+        // Примечание: Фронтенд должен отправлять только поля, заполненные преподавателем.
+        const newSubmittedData = { ...doc.submitted_data, ...reviewData };
         
-        // Объединяем старые и новые данные
-        const finalSubmittedData = { ...existingData, ...finalTeacherData };
-        
-        // 3. Обновляем документ и меняем статус на "Завершено"
-        const result = await pool.query(
-            'UPDATE documents SET status = $1, submitted_data = $2 WHERE id = $3 AND teacher_id = $4 RETURNING id',
-            ['Завершено', finalSubmittedData, documentId, teacherId]
+        // 3. Обновить статус и данные
+        await pool.query(
+            'UPDATE documents SET submitted_data = $1, status = $2 WHERE id = $3',
+            [newSubmittedData, 'Ожидает утверждения Куратором', docId]
         );
 
-        res.status(200).json({ 
-            success: true, 
-            message: `Документ "${documentId}" успешно завершен и утвержден. Теперь он виден Куратору.` 
-        });
-    } catch (error) {
-        console.error("Ошибка при финализации документа:", error);
-        res.status(500).json({ success: false, message: "Ошибка сервера при финализации документа." });
+        res.json({ success: true, message: `Рецензия документа "${doc.title}" завершена. Отправлено Куратору на утверждение.` });
+
+    } catch (err) {
+        console.error("Ошибка рецензирования документа преподавателем:", err);
+        res.status(500).json({ success: false, message: "Ошибка сервера при рецензировании документа." });
     }
 });
 
-
-// --- МАРШРУТ: ПОЛУЧЕНИЕ ВСЕХ ДОКУМЕНТОВ (КУРАТОР) ---
-app.get('/api/documents/curator', authenticateToken, isCurator, async (req, res) => {
-    
+// --- API ДОКУМЕНТОВ: ПРОСМОТР ДЛЯ КУРАТОРА ---
+app.get('/api/documents/curator', authenticateToken, checkRole(['Куратор']), async (req, res) => {
     try {
-        const documentsResult = await pool.query(
-            `SELECT id, title, student_email, template, status, submitted_data, created_at, teacher_id 
-             FROM documents 
-             ORDER BY created_at DESC`
+        const result = await pool.query(
+            'SELECT d.id, d.title, d.template_name, d.status, d.submitted_data, d.teacher_id, u.email as student_email FROM documents d JOIN users u ON d.student_id = u.id ORDER BY d.id DESC'
         );
-        
-        res.status(200).json({ 
-            success: true, 
-            documents: documentsResult.rows 
-        });
 
-    } catch (error) {
-        console.error("Ошибка получения документов для Куратора:", error);
-        res.status(500).json({ success: false, message: "Ошибка сервера при получении документов." });
+        const documents = result.rows.map(doc => ({
+            ...doc,
+            template: documentTemplates[doc.template_name]
+        }));
+
+        res.json({ success: true, documents });
+
+    } catch (err) {
+        console.error("Ошибка загрузки документов для куратора:", err);
+        res.status(500).json({ success: false, message: "Ошибка сервера при загрузке документов." });
     }
 });
 
-
-// --- ИЗМЕНЕННЫЙ МАРШРУТ: СКАЧИВАНИЕ ДОКУМЕНТА (КУРАТОР) - ГЕНЕРАЦИЯ DOCX ---
-app.get('/api/documents/download/:id', authenticateToken, isCurator, async (req, res) => {
-    const documentId = parseInt(req.params.id);
-
+// --- НОВЫЙ API ДОКУМЕНТОВ: УТВЕРЖДЕНИЕ КУРАТОРОМ ---
+app.put('/api/documents/approve/:docId', authenticateToken, checkRole(['Куратор']), async (req, res) => {
     try {
-        // Получаем документ, включая email преподавателя и имя студента
-        const result = await pool.query(
-            `SELECT d.title, d.status, d.submitted_data, d.template, d.created_at, u.email as teacher_email, u2.name as student_name
-             FROM documents d
-             JOIN users u ON d.teacher_id = u.id
-             JOIN users u2 ON d.student_email = u2.email
-             WHERE d.id = $1`,
-            [documentId]
-        );
+        const { docId } = req.params;
 
-        if (result.rowCount === 0) {
+        const docResult = await pool.query(
+            'SELECT * FROM documents WHERE id = $1', 
+            [docId]
+        );
+        const doc = docResult.rows[0];
+
+        if (!doc) {
             return res.status(404).json({ success: false, message: "Документ не найден." });
         }
-
-        const doc = result.rows[0];
-        const templateParts = doc.template.parts;
-        const submittedData = doc.submitted_data || {};
-        const createdAt = new Date(doc.created_at).toLocaleString('ru-RU');
         
-        // --- 1. Создание элементов DOCX ---
-        const docxContent = [
-            new Paragraph({
-                text: `Портал ВУЗа - Документ: ${doc.title}`,
-                heading: HeadingLevel.HEADING_1,
-                alignment: AlignmentType.CENTER,
-                spacing: { before: 200, after: 200 }
-            }),
-             new Paragraph({
-                text: `ID Документа: ${documentId} | Статус: ${doc.status} | Создан: ${createdAt}`,
-                alignment: AlignmentType.LEFT,
-                spacing: { after: 100 }
-            }),
-             new Paragraph({
-                text: `Студент: ${doc.student_name} (${doc.student_email}) | Преподаватель (Создатель): ${doc.teacher_email}`,
-                alignment: AlignmentType.LEFT,
-                spacing: { after: 200 }
-            }),
-            new Paragraph({ text: '=================================================================' }),
-        ];
+        if (doc.status !== 'Ожидает утверждения Куратором') {
+             return res.status(400).json({ success: false, message: `Документ должен быть в статусе "Ожидает утверждения Куратором" для завершения.` });
+        }
+        
+        // Обновить статус на 'Завершено'
+        await pool.query(
+            'UPDATE documents SET status = $1 WHERE id = $2',
+            ['Завершено', docId]
+        );
 
-        // --- 2. Форматирование содержания на основе шаблона и заполненных данных ---
+        res.json({ success: true, message: `Документ "${doc.title}" успешно утвержден и завершен.` });
+
+    } catch (err) {
+        console.error("Ошибка утверждения документа куратором:", err);
+        res.status(500).json({ success: false, message: "Ошибка сервера при утверждении документа." });
+    }
+});
+
+
+// --- API ДОКУМЕНТОВ: СКАЧИВАНИЕ (ТОЛЬКО КУРАТОР) ---
+app.get('/api/documents/download/:docId', authenticateToken, checkRole(['Куратор']), async (req, res) => {
+    try {
+        const documentId = req.params.docId;
+
+        // 1. Получить данные документа
+        const docResult = await pool.query('SELECT * FROM documents WHERE id = $1', [documentId]);
+        const doc = docResult.rows[0];
+
+        if (!doc) {
+            return res.status(404).json({ success: false, message: "Документ не найден." });
+        }
+        
+        // 2. Проверить статус (для скачивания нужен утвержденный документ)
+        if (doc.status !== 'Ожидает утверждения Куратором' && doc.status !== 'Завершено') {
+             return res.status(403).json({ success: false, message: `Документ не готов к скачиванию. Текущий статус: ${doc.status}` });
+        }
+
+
+        const submittedData = doc.submitted_data;
+        const templateParts = documentTemplates[doc.template_name].parts;
+
+        let content = `=====================================================================\n`;
+        content += `ДОКУМЕНТ: ${doc.title} (ID: ${documentId})\n`;
+        content += `ШАБЛОН: ${doc.template_name}\n`;
+        content += `СТАТУС: ${doc.status}\n`;
+        content += `=====================================================================\n\n`;
+        
+        content += `СОДЕРЖАНИЕ ДОКУМЕНТА:\n\n`;
+
+        // Форматирование содержания на основе шаблона и заполненных данных
         templateParts.forEach(part => {
             if (part.type === 'text') {
-                // Обычный текст
-                docxContent.push(new Paragraph({
-                    children: [
-                        new TextRun(part.content)
-                    ],
-                    spacing: { after: 100 }
-                }));
+                content += part.content;
             } else if (part.type === 'input') {
                 const value = submittedData[part.name];
-                const displayValue = value || `[${part.name} (НЕ ЗАПОЛНЕН)]`;
-                
-                // Выделение заполненного поля жирным шрифтом и курсивом
-                docxContent.push(new Paragraph({
-                    children: [
-                        new TextRun({
-                            text: `${part.name} (${part.role}): `,
-                            bold: true,
-                        }),
-                        new TextRun({
-                            text: displayValue,
-                            bold: true,
-                            italics: true,
-                            color: value ? "004085" : "FF0000" // Синий, если заполнено, Красный, если нет
-                        })
-                    ],
-                    spacing: { after: 100 }
-                }));
+                const displayValue = value ? `[${value}]` : `[${part.name} (НЕ ЗАПОЛНЕН)]`;
+                content += displayValue;
             }
         });
         
-        docxContent.push(new Paragraph({ text: '=================================================================' }));
-        docxContent.push(new Paragraph({ text: 'ФИНАЛЬНЫЕ ДАННЫЕ (RAW JSON):', heading: HeadingLevel.HEADING_3 }));
-        
-        // Добавление RAW JSON в виде моноширинного текста
-        docxContent.push(new Paragraph({
-            children: [
-                new TextRun({
-                    text: JSON.stringify(submittedData, null, 2),
-                    font: 'Courier New',
-                    size: 18, // 9pt
-                })
-            ]
-        }));
+        content += `\n\n=====================================================================\n`;
+        content += `ФИНАЛЬНЫЕ ДАННЫЕ (RAW JSON):\n`;
+        content += JSON.stringify(submittedData, null, 2);
+        content += `\n\n=====================================================================\n`;
 
-
-        // --- 3. Генерация DOCX ---
-        const document = new Document({
-            sections: [{
-                children: docxContent,
-            }],
-        });
-
-        // Преобразование документа в бинарный буфер
-        const buffer = await Packer.toBuffer(document);
-
-        // --- 4. Отправка ответа ---
-        const filename = `${doc.title}_ID${documentId}_${new Date().toISOString().slice(0, 10)}.docx`;
-        // Устанавливаем заголовок Content-Type для DOCX
+        // Установка заголовков для скачивания файла
+        // ВНИМАНИЕ: Для упрощения используется .txt, но вы можете заменить на .docx
+        const filename = `${doc.title}_ID${documentId}_${new Date().toISOString().slice(0, 10)}.txt`;
         res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
         
-        res.send(buffer);
+        res.send(content);
 
     } catch (error) {
         console.error("Ошибка при скачивании документа:", error);
-        res.status(500).json({ success: false, message: "Ошибка при генерации или скачивании DOCX." });
+        res.status(500).json({ success: false, message: "Ошибка сервера при скачивании документа." });
     }
 });
 
 
-app.listen(port, () => {
-    console.log(`Сервер API запущен на порту ${port}`);
+// --- ЗАПУСК СЕРВЕРА ---
+initializeDb().then(() => {
+    app.listen(port, () => {
+        console.log(`Сервер запущен на порту ${port}`);
+    });
 });
