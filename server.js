@@ -1,4 +1,4 @@
-// auth_api/server.js - ФИНАЛЬНАЯ ВЕРСИЯ С ФУНКЦИЕЙ СКАЧИВАНИЯ
+// auth_api/server.js - ФИНАЛЬНАЯ ВЕРСИЯ С ФУНКЦИЕЙ СКАЧИВАНИЯ DOCX
 
 const express = require('express');
 const bcrypt = require('bcrypt');
@@ -6,6 +6,9 @@ const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const { Pool } = require('pg'); 
 require('dotenv').config();
+
+// НОВЫЙ ИМПОРТ ДЛЯ РАБОТЫ С DOCX
+const { Document, Packer, Paragraph, TextRun, AlignmentType, HeadingLevel } = require('docx'); 
 
 const app = express();
 const port = process.env.PORT || 3000; 
@@ -499,14 +502,14 @@ app.get('/api/documents/curator', authenticateToken, isCurator, async (req, res)
 });
 
 
-// --- НОВЫЙ МАРШРУТ: СКАЧИВАНИЕ ДОКУМЕНТА (КУРАТОР) ---
+// --- ИЗМЕНЕННЫЙ МАРШРУТ: СКАЧИВАНИЕ ДОКУМЕНТА (КУРАТОР) - ГЕНЕРАЦИЯ DOCX ---
 app.get('/api/documents/download/:id', authenticateToken, isCurator, async (req, res) => {
-    const documentId = req.params.id;
+    const documentId = parseInt(req.params.id);
 
     try {
         // Получаем документ, включая email преподавателя и имя студента
         const result = await pool.query(
-            `SELECT d.title, d.status, d.submitted_data, d.template, u.email as teacher_email, u2.name as student_name
+            `SELECT d.title, d.status, d.submitted_data, d.template, d.created_at, u.email as teacher_email, u2.name as student_name
              FROM documents d
              JOIN users u ON d.teacher_id = u.id
              JOIN users u2 ON d.student_email = u2.email
@@ -519,46 +522,100 @@ app.get('/api/documents/download/:id', authenticateToken, isCurator, async (req,
         }
 
         const doc = result.rows[0];
-        const submittedData = doc.submitted_data || {};
         const templateParts = doc.template.parts;
-
-        // Генерация текстового содержимого
-        let content = `=====================================================================\n`;
-        content += `ДОКУМЕНТ: ${doc.title.toUpperCase()}\n`;
-        content += `ID: ${documentId}\n`;
-        content += `СТАТУС: ${doc.status}\n`;
-        content += `СТУДЕНТ: ${doc.student_name} (${doc.student_email})\n`;
-        content += `ПРЕПОДАВАТЕЛЬ (СОЗДАТЕЛЬ): ${doc.teacher_email}\n`;
-        content += `=====================================================================\n\n`;
+        const submittedData = doc.submitted_data || {};
+        const createdAt = new Date(doc.created_at).toLocaleString('ru-RU');
         
-        content += `СОДЕРЖАНИЕ ДОКУМЕНТА:\n\n`;
+        // --- 1. Создание элементов DOCX ---
+        const docxContent = [
+            new Paragraph({
+                text: `Портал ВУЗа - Документ: ${doc.title}`,
+                heading: HeadingLevel.HEADING_1,
+                alignment: AlignmentType.CENTER,
+                spacing: { before: 200, after: 200 }
+            }),
+             new Paragraph({
+                text: `ID Документа: ${documentId} | Статус: ${doc.status} | Создан: ${createdAt}`,
+                alignment: AlignmentType.LEFT,
+                spacing: { after: 100 }
+            }),
+             new Paragraph({
+                text: `Студент: ${doc.student_name} (${doc.student_email}) | Преподаватель (Создатель): ${doc.teacher_email}`,
+                alignment: AlignmentType.LEFT,
+                spacing: { after: 200 }
+            }),
+            new Paragraph({ text: '=================================================================' }),
+        ];
 
-        // Форматирование содержания на основе шаблона и заполненных данных
+        // --- 2. Форматирование содержания на основе шаблона и заполненных данных ---
         templateParts.forEach(part => {
             if (part.type === 'text') {
-                content += part.content;
+                // Обычный текст
+                docxContent.push(new Paragraph({
+                    children: [
+                        new TextRun(part.content)
+                    ],
+                    spacing: { after: 100 }
+                }));
             } else if (part.type === 'input') {
                 const value = submittedData[part.name];
-                const displayValue = value ? `[${value}]` : `[${part.name} (НЕ ЗАПОЛНЕН)]`;
-                content += displayValue;
+                const displayValue = value || `[${part.name} (НЕ ЗАПОЛНЕН)]`;
+                
+                // Выделение заполненного поля жирным шрифтом и курсивом
+                docxContent.push(new Paragraph({
+                    children: [
+                        new TextRun({
+                            text: `${part.name} (${part.role}): `,
+                            bold: true,
+                        }),
+                        new TextRun({
+                            text: displayValue,
+                            bold: true,
+                            italics: true,
+                            color: value ? "004085" : "FF0000" // Синий, если заполнено, Красный, если нет
+                        })
+                    ],
+                    spacing: { after: 100 }
+                }));
             }
         });
         
-        content += `\n\n=====================================================================\n`;
-        content += `ФИНАЛЬНЫЕ ДАННЫЕ (RAW JSON):\n`;
-        content += JSON.stringify(submittedData, null, 2);
-        content += `\n\n=====================================================================\n`;
-
-        // Установка заголовков для скачивания файла
-        const filename = `${doc.title}_ID${documentId}_${new Date().toISOString().slice(0, 10)}.txt`;
-        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        docxContent.push(new Paragraph({ text: '=================================================================' }));
+        docxContent.push(new Paragraph({ text: 'ФИНАЛЬНЫЕ ДАННЫЕ (RAW JSON):', heading: HeadingLevel.HEADING_3 }));
         
-        res.send(content);
+        // Добавление RAW JSON в виде моноширинного текста
+        docxContent.push(new Paragraph({
+            children: [
+                new TextRun({
+                    text: JSON.stringify(submittedData, null, 2),
+                    font: 'Courier New',
+                    size: 18, // 9pt
+                })
+            ]
+        }));
+
+
+        // --- 3. Генерация DOCX ---
+        const document = new Document({
+            sections: [{
+                children: docxContent,
+            }],
+        });
+
+        // Преобразование документа в бинарный буфер
+        const buffer = await Packer.toBuffer(document);
+
+        // --- 4. Отправка ответа ---
+        const filename = `${doc.title}_ID${documentId}_${new Date().toISOString().slice(0, 10)}.docx`;
+        // Устанавливаем заголовок Content-Type для DOCX
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+        
+        res.send(buffer);
 
     } catch (error) {
         console.error("Ошибка при скачивании документа:", error);
-        res.status(500).json({ success: false, message: "Ошибка сервера при генерации файла." });
+        res.status(500).json({ success: false, message: "Ошибка при генерации или скачивании DOCX." });
     }
 });
 
