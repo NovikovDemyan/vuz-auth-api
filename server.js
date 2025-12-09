@@ -482,17 +482,16 @@ app.put('/api/documents/teacher/action/:id', authenticateToken, isTeacher, async
 });
 
 
-// --- 10. МАРШРУТ: СКАЧИВАНИЕ ФИНАЛЬНОГО ДОКУМЕНТА (КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: ПРЕОБРАЗОВАНИЕ ID) ---
+// --- 10. МАРШРУТ: СКАЧИВАНИЕ ФИНАЛЬНОГО ДОКУМЕНТА (КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: БЕЗОПАСНЫЙ ДОСТУП К JSONB) ---
 app.get('/api/documents/download/:id', authenticateToken, isTeacherOrCurator, async (req, res) => {
     
-    // *** ИСПРАВЛЕНИЕ: Преобразование documentId в целое число (INTEGER) ***
+    // 1. Преобразование ID в число (уже исправлено, но повторно для надежности)
     const documentId = parseInt(req.params.id, 10);
     if (isNaN(documentId)) {
         return res.status(400).json({ success: false, message: "Неверный ID документа." });
     }
     
     const isCurator = req.user.role === 'Куратор';
-    // *** ИСПРАВЛЕНИЕ: Преобразование teacherId в целое число (INTEGER) ***
     const teacherId = isCurator ? null : parseInt(req.user.id, 10); 
 
     try {
@@ -501,7 +500,6 @@ app.get('/api/documents/download/:id', authenticateToken, isTeacherOrCurator, as
                      WHERE d.id = $1 AND d.status IN ($2, $3)`; 
         let params = [documentId, 'Готов к утверждению куратором', 'Утверждено куратором'];
 
-        // Если это не Куратор, добавляем проверку на принадлежность документа
         if (!isCurator) {
             query += ` AND d.teacher_id = $4`;
             params.push(teacherId);
@@ -515,7 +513,10 @@ app.get('/api/documents/download/:id', authenticateToken, isTeacherOrCurator, as
         }
 
         const submittedData = doc.submitted_data || {};
-        const templateParts = doc.template.parts || [];
+        
+        // *** НОВОЕ ИСПРАВЛЕНИЕ: Безопасный доступ к полю template (JSONB) ***
+        // Проверяем, что doc.template существует и doc.template.parts является массивом
+        const templateParts = (doc.template && Array.isArray(doc.template.parts)) ? doc.template.parts : [];
         
         let fileContent = `--- Документ: ${doc.title} (ID: ${documentId}) ---\n\n`;
         
