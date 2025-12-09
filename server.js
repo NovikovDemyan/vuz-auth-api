@@ -1,4 +1,4 @@
-// auth_api/server.js - ФИНАЛЬНАЯ ИСПРАВЛЕННАЯ ВЕРСИЯ
+// auth_api/server.js - ФИНАЛЬНАЯ ВЕРСИЯ С ФУНКЦИЕЙ СКАЧИВАНИЯ
 
 const express = require('express');
 const bcrypt = require('bcrypt');
@@ -435,13 +435,12 @@ app.get('/api/documents/teacher', authenticateToken, isTeacher, async (req, res)
 });
 
 
-// --- НОВЫЙ МАРШРУТ: ФИНАЛИЗАЦИЯ/УТВЕРЖДЕНИЕ ДОКУМЕНТА (ПРЕПОДАВАТЕЛЬ) ---
+// --- МАРШРУТ: ФИНАЛИЗАЦИЯ/УТВЕРЖДЕНИЕ ДОКУМЕНТА (ПРЕПОДАВАТЕЛЬ) ---
 app.put('/api/documents/finalize/:id', authenticateToken, isTeacher, async (req, res) => {
     const documentId = req.params.id;
     const { finalTeacherData } = req.body; 
     const teacherId = req.user.id;
 
-    // ВАЛИДАЦИЯ, которая вызывала 400 при пустой форме:
     if (!finalTeacherData || Object.keys(finalTeacherData).length === 0) {
          return res.status(400).json({ success: false, message: "Отсутствуют финальные данные для заполнения." });
     }
@@ -458,7 +457,7 @@ app.put('/api/documents/finalize/:id', authenticateToken, isTeacher, async (req,
         
         const existingData = currentDoc.rows[0].submitted_data || {};
         
-        // Объединяем старые и новые (техническое поле, если не было других) данные
+        // Объединяем старые и новые данные
         const finalSubmittedData = { ...existingData, ...finalTeacherData };
         
         // 3. Обновляем документ и меняем статус на "Завершено"
@@ -478,11 +477,10 @@ app.put('/api/documents/finalize/:id', authenticateToken, isTeacher, async (req,
 });
 
 
-// --- НОВЫЙ МАРШРУТ: ПОЛУЧЕНИЕ ВСЕХ ДОКУМЕНТОВ (КУРАТОР) ---
+// --- МАРШРУТ: ПОЛУЧЕНИЕ ВСЕХ ДОКУМЕНТОВ (КУРАТОР) ---
 app.get('/api/documents/curator', authenticateToken, isCurator, async (req, res) => {
     
     try {
-        // Куратор видит все документы
         const documentsResult = await pool.query(
             `SELECT id, title, student_email, template, status, submitted_data, created_at, teacher_id 
              FROM documents 
@@ -497,6 +495,70 @@ app.get('/api/documents/curator', authenticateToken, isCurator, async (req, res)
     } catch (error) {
         console.error("Ошибка получения документов для Куратора:", error);
         res.status(500).json({ success: false, message: "Ошибка сервера при получении документов." });
+    }
+});
+
+
+// --- НОВЫЙ МАРШРУТ: СКАЧИВАНИЕ ДОКУМЕНТА (КУРАТОР) ---
+app.get('/api/documents/download/:id', authenticateToken, isCurator, async (req, res) => {
+    const documentId = req.params.id;
+
+    try {
+        // Получаем документ, включая email преподавателя и имя студента
+        const result = await pool.query(
+            `SELECT d.title, d.status, d.submitted_data, d.template, u.email as teacher_email, u2.name as student_name
+             FROM documents d
+             JOIN users u ON d.teacher_id = u.id
+             JOIN users u2 ON d.student_email = u2.email
+             WHERE d.id = $1`,
+            [documentId]
+        );
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ success: false, message: "Документ не найден." });
+        }
+
+        const doc = result.rows[0];
+        const submittedData = doc.submitted_data || {};
+        const templateParts = doc.template.parts;
+
+        // Генерация текстового содержимого
+        let content = `=====================================================================\n`;
+        content += `ДОКУМЕНТ: ${doc.title.toUpperCase()}\n`;
+        content += `ID: ${documentId}\n`;
+        content += `СТАТУС: ${doc.status}\n`;
+        content += `СТУДЕНТ: ${doc.student_name} (${doc.student_email})\n`;
+        content += `ПРЕПОДАВАТЕЛЬ (СОЗДАТЕЛЬ): ${doc.teacher_email}\n`;
+        content += `=====================================================================\n\n`;
+        
+        content += `СОДЕРЖАНИЕ ДОКУМЕНТА:\n\n`;
+
+        // Форматирование содержания на основе шаблона и заполненных данных
+        templateParts.forEach(part => {
+            if (part.type === 'text') {
+                content += part.content;
+            } else if (part.type === 'input') {
+                const value = submittedData[part.name];
+                const displayValue = value ? `[${value}]` : `[${part.name} (НЕ ЗАПОЛНЕН)]`;
+                content += displayValue;
+            }
+        });
+        
+        content += `\n\n=====================================================================\n`;
+        content += `ФИНАЛЬНЫЕ ДАННЫЕ (RAW JSON):\n`;
+        content += JSON.stringify(submittedData, null, 2);
+        content += `\n\n=====================================================================\n`;
+
+        // Установка заголовков для скачивания файла
+        const filename = `${doc.title}_ID${documentId}_${new Date().toISOString().slice(0, 10)}.txt`;
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        
+        res.send(content);
+
+    } catch (error) {
+        console.error("Ошибка при скачивании документа:", error);
+        res.status(500).json({ success: false, message: "Ошибка сервера при генерации файла." });
     }
 });
 
