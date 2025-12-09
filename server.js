@@ -41,7 +41,7 @@ const documentTemplates = {
             { type: "text", content: ". Приказ о согласовании №" },
             { type: "input", name: "Номер_Приказа_Ректора", role: "Преподаватель" }, 
             { type: "text", content: ". Примечание преподавателя: " }, 
-            { type: "input", name: "Примечание_Преподавателя_Финальное", role: "Преподаватель" } // Добавлено поле, которое заполняется после студента
+            { type: "input", name: "Примечание_Преподавателя_Финальное", role: "Преподаватель" } 
         ]
     },
     'Уведомление о Задолженности': {
@@ -101,12 +101,10 @@ async function createUsersTable() {
         `;
         await pool.query(queryDocuments);
         
-        // Попытка добавить поле, если оно не существует (если таблица уже была создана ранее)
-        // В реальном проекте требуется более сложная миграция, но для примера этого достаточно
+        // Попытка добавить поле, если оно не существует
         try {
             await pool.query("ALTER TABLE documents ADD COLUMN IF NOT EXISTS teacher_comment TEXT");
         } catch(err) {
-            // Если ALTER TABLE завершится ошибкой (например, в некоторых старых версиях PostgreSQL без IF NOT EXISTS)
             console.warn("Предупреждение: Не удалось выполнить ALTER TABLE для teacher_comment.");
         }
 
@@ -148,7 +146,7 @@ app.use(cors(corsOptions));
 app.use(express.json()); 
 
 
-// --- MIDDLEWARE ПРОВЕРКИ JWT и РОЛИ (Без изменений) ---
+// --- MIDDLEWARE ПРОВЕРКИ JWT и РОЛИ (Добавлена isTeacherOrCurator) ---
 function authenticateToken(req, res, next) {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1]; 
@@ -188,8 +186,6 @@ function isTeacherOrCurator(req, res, next) {
 // --- 1-6. Маршруты Аутентификации, Управления Ролями и Создания Документа (Без изменений) ---
 
 app.post('/api/register', async (req, res) => {
-// ... (Register logic)
-// ...
     const { name, email, password } = req.body;
     
     try {
@@ -213,8 +209,6 @@ app.post('/api/register', async (req, res) => {
 });
 
 app.post('/api/login', async (req, res) => {
-// ... (Login logic)
-// ...
     const { email, password } = req.body;
     
     try {
@@ -241,8 +235,6 @@ app.post('/api/login', async (req, res) => {
 });
 
 app.get('/api/greeting', authenticateToken, (req, res) => {
-// ... (Greeting logic)
-// ...
     const userName = req.user.name;
     const userRole = req.user.role; 
 
@@ -254,8 +246,6 @@ app.get('/api/greeting', authenticateToken, (req, res) => {
 });
 
 app.put('/api/users/role', authenticateToken, isCurator, async (req, res) => {
-// ... (Role update logic)
-// ...
     const { email, newRole } = req.body;
 
     if (!['Студент', 'Преподаватель', 'Куратор'].includes(newRole)) {
@@ -283,8 +273,6 @@ app.put('/api/users/role', authenticateToken, isCurator, async (req, res) => {
 });
 
 app.get('/api/users', authenticateToken, isCurator, async (req, res) => {
-// ... (Get all users logic)
-// ...
     try {
         const result = await pool.query('SELECT id, name, email, role, hashedpassword FROM users ORDER BY id ASC');
         
@@ -301,8 +289,6 @@ app.get('/api/users', authenticateToken, isCurator, async (req, res) => {
 
 // --- 6. МАРШРУТ: СОЗДАНИЕ НОВОГО ДОКУМЕНТА (Без изменений) ---
 app.post('/api/documents/create', authenticateToken, isTeacher, async (req, res) => {
-// ... (Document creation logic)
-// ...
     const { templateName, studentEmail, title, teacherData } = req.body; 
 
     const template = documentTemplates[templateName];
@@ -418,7 +404,7 @@ app.put('/api/documents/submit/:id', authenticateToken, async (req, res) => {
 });
 
 
-// --- 9. МАРШРУТ: ПОЛУЧЕНИЕ ВСЕХ ДОКУМЕНТОВ, СОЗДАННЫХ ПРЕПОДАВАТЕЛЕМ (ОБНОВЛЕН: добавлен teacher_comment) ---
+// --- 9. МАРШРУТ: ПОЛУЧЕНИЕ ВСЕХ ДОКУМЕНТОВ, СОЗДАННЫХ ПРЕПОДАВАТЕЛЕМ (ОБНОВЛЕН) ---
 app.get('/api/documents/teacher', authenticateToken, isTeacher, async (req, res) => {
     
     const teacherId = req.user.id; 
@@ -443,7 +429,7 @@ app.get('/api/documents/teacher', authenticateToken, isTeacher, async (req, res)
     }
 });
 
-// --- 12. НОВЫЙ МАРШРУТ: ДЕЙСТВИЯ ПРЕПОДАВАТЕЛЯ (ОТКЛОНЕНИЕ/УТВЕРЖДЕНИЕ) ---
+// --- 12. МАРШРУТ: ДЕЙСТВИЯ ПРЕПОДАВАТЕЛЯ (ОТКЛОНЕНИЕ/УТВЕРЖДЕНИЕ) ---
 app.put('/api/documents/teacher/action/:id', authenticateToken, isTeacher, async (req, res) => {
     const documentId = req.params.id;
     const teacherId = req.user.id;
@@ -463,7 +449,6 @@ app.put('/api/documents/teacher/action/:id', authenticateToken, isTeacher, async
             return res.status(404).json({ success: false, message: `Документ с ID ${documentId} не найден или недоступен для вас.` });
         }
         
-        // Объединяем существующие данные с данными, заполненными преподавателем на этом шаге
         const currentData = docResult.rows[0].submitted_data || {};
         const finalData = { ...currentData, ...(teacherData || {}) };
         
@@ -501,7 +486,7 @@ app.put('/api/documents/teacher/action/:id', authenticateToken, isTeacher, async
 });
 
 
-// --- 10. МАРШРУТ: СКАЧИВАНИЕ ФИНАЛЬНОГО ДОКУМЕНТА (КУРАТОР/ПРЕПОДАВАТЕЛЬ) (ОБНОВЛЕН) ---
+// --- 10. МАРШРУТ: СКАЧИВАНИЕ ФИНАЛЬНОГО ДОКУМЕНТА (ИСПРАВЛЕНО!) ---
 app.get('/api/documents/download/:id', authenticateToken, isTeacherOrCurator, async (req, res) => {
     const documentId = req.params.id;
     const isCurator = req.user.role === 'Куратор';
@@ -510,12 +495,12 @@ app.get('/api/documents/download/:id', authenticateToken, isTeacherOrCurator, as
     try {
         let query = `SELECT d.title, d.submitted_data, d.template
                      FROM documents d
-                     WHERE d.id = $1 AND d.status IN ('Готов к утверждению куратором', 'Утверждено куратором')`;
-        let params = [documentId];
+                     WHERE d.id = $1 AND d.status IN ($2, $3)`; // Используем IN для финальных статусов
+        let params = [documentId, 'Готов к утверждению куратором', 'Утверждено куратором'];
 
         // Если это не Куратор, добавляем проверку на принадлежность документа
         if (!isCurator) {
-            query += ` AND d.teacher_id = $2`;
+            query += ` AND d.teacher_id = $4`;
             params.push(teacherId);
         }
 
@@ -523,6 +508,7 @@ app.get('/api/documents/download/:id', authenticateToken, isTeacherOrCurator, as
         const doc = docResult.rows[0];
 
         if (!doc) {
+            // Если документ не найден, он либо недоступен, либо не в финальном статусе
             return res.status(404).json({ success: false, message: `Документ с ID ${documentId} не найден, не утвержден или недоступен для вас.` });
         }
 
@@ -551,8 +537,9 @@ app.get('/api/documents/download/:id', authenticateToken, isTeacherOrCurator, as
         res.send(fileContent);
 
     } catch (error) {
-        console.error("Ошибка при скачивании документа:", error);
-        res.status(500).json({ success: false, message: "Ошибка сервера при скачивании документа." });
+        console.error("КРИТИЧЕСКАЯ ОШИБКА при скачивании документа:", error);
+        // Возвращаем 500 только при критической ошибке, а не при 404
+        res.status(500).json({ success: false, message: "Критическая ошибка сервера при скачивании документа." });
     }
 });
 
