@@ -1,4 +1,8 @@
 // auth_api/server.js - ФИНАЛЬНАЯ ВЕРСИЯ С ПОЛНЫМ ЦИКЛОМ ПРОВЕРКИ (Студент -> Преподаватель -> Куратор)
+const fs = require("fs");
+const path = require("path");
+const PizZip = require("pizzip");
+const Docxtemplater = require("docxtemplater");
 
 const express = require('express');
 const bcrypt = require('bcrypt');
@@ -482,66 +486,71 @@ app.put('/api/documents/teacher/action/:id', authenticateToken, isTeacher, async
 });
 
 
-// --- 10. МАРШРУТ: СКАЧИВАНИЕ ФИНАЛЬНОГО ДОКУМЕНТА (КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: БЕЗОПАСНЫЙ ДОСТУП К JSONB) ---
-app.get('/api/documents/download/:id', authenticateToken, isTeacherOrCurator, async (req, res) => {
-    
-    // 1. Преобразование ID в число (уже исправлено, но повторно для надежности)
+app.get('/api/documents/download/:id',
+    authenticateToken,
+    isTeacherOrCurator,
+    async (req, res) => {
+
     const documentId = parseInt(req.params.id, 10);
     if (isNaN(documentId)) {
-        return res.status(400).json({ success: false, message: "Неверный ID документа." });
+        return res.status(400).json({ message: "Неверный ID документа" });
     }
-    
-    const isCurator = req.user.role === 'Куратор';
-    const teacherId = isCurator ? null : parseInt(req.user.id, 10); 
+
+    const result = await pool.query(
+        `SELECT title, submitted_data, template_file
+         FROM documents
+         WHERE id = $1`,
+        [documentId]
+    );
+
+    const doc = result.rows[0];
+    if (!doc) {
+        return res.status(404).json({ message: "Документ не найден" });
+    }
+
+    const templatePath = path.join(
+        __dirname,
+        "templates",
+        doc.template_file || "document.docx"
+    );
+
+    if (!fs.existsSync(templatePath)) {
+        return res.status(500).json({
+            message: "Файл шаблона не найден на сервере"
+        });
+    }
 
     try {
-        let query = `SELECT d.title, d.submitted_data, d.template
-                     FROM documents d
-                     WHERE d.id = $1 AND d.status IN ($2, $3)`; 
-        let params = [documentId, 'Готов к утверждению куратором', 'Утверждено куратором'];
+        const content = fs.readFileSync(templatePath, "binary");
+        const zip = new PizZip(content);
 
-        if (!isCurator) {
-            query += ` AND d.teacher_id = $4`;
-            params.push(teacherId);
-        }
-
-        const docResult = await pool.query(query, params);
-        const doc = docResult.rows[0];
-
-        if (!doc) {
-            return res.status(404).json({ success: false, message: `Документ с ID ${documentId} не найден, не утвержден или недоступен для вас.` });
-        }
-
-        const submittedData = doc.submitted_data || {};
-        
-        // *** НОВОЕ ИСПРАВЛЕНИЕ: Безопасный доступ к полю template (JSONB) ***
-        // Проверяем, что doc.template существует и doc.template.parts является массивом
-        const templateParts = (doc.template && Array.isArray(doc.template.parts)) ? doc.template.parts : [];
-        
-        let fileContent = `--- Документ: ${doc.title} (ID: ${documentId}) ---\n\n`;
-        
-        // Форматируем контент
-        templateParts.forEach(part => {
-            if (part.type === 'text') {
-                fileContent += part.content.trim() + ' ';
-            } else if (part.type === 'input') {
-                const value = submittedData[part.name] || `[НЕ ЗАПОЛНЕНО: ${part.name} (${part.role})]`;
-                fileContent += `${value} `;
-            }
+        const docx = new Docxtemplater(zip, {
+            paragraphLoop: true,
+            linebreaks: true
         });
-        
-        fileContent += `\n\n--------------------------------------------\n`;
-        fileContent += `Дата формирования: ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`;
 
-        const filename = `${doc.title.replace(/\s/g, '_')}_ID${documentId}.txt`;
-        
-        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-        res.send(fileContent);
+        docx.render(doc.submitted_data || {});
+
+        const buffer = docx
+            .getZip()
+            .generate({ type: "nodebuffer" });
+
+        res.setHeader(
+            "Content-Disposition",
+            `attachment; filename="${doc.title}.docx"`
+        );
+        res.setHeader(
+            "Content-Type",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        );
+
+        res.send(buffer);
 
     } catch (error) {
-        console.error("КРИТИЧЕСКАЯ ОШИБКА при скачивании документа:", error);
-        res.status(500).json({ success: false, message: "Критическая ошибка сервера при скачивании документа." });
+        console.error("Ошибка генерации DOCX:", error);
+        res.status(500).json({
+            message: "Ошибка генерации документа Word"
+        });
     }
 });
 
