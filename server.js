@@ -11,7 +11,7 @@ const app = express();
 const port = process.env.PORT || 3000; 
 const SALT_ROUNDS = 10;
 
-// !!! СЕКРЕТЫ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ RENDER !!!
+// !!! СЕКРЕТЫ ИЗ ПЕРЕМЕЫХ ОКРУЖЕНИЯ RENDER !!!
 const SECRET_KEY = process.env.JWT_SECRET;
 const DATABASE_URL = process.env.DATABASE_URL; 
 
